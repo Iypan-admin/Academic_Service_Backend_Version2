@@ -1,0 +1,29 @@
+# Node.js modules
+node_modules/
+
+# Logs
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Environment variables
+.env
+.env.*.local
+
+# Production build
+dist/
+build/
+
+# Cache directories
+.cache/
+.pnp
+.pnp.js
+
+# Dependency directories
+.bower_components/
+
+# Test coverage
+coverage/
+
+# IDE/Editor directories

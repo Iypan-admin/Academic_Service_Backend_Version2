@@ -1,9 +1,10 @@
 const express = require("express");
 const {
-    createAttendanceSession,
-    getBatchAttendance,
-    updateAttendanceRecord,
-    debugTeacherAssignment
+  createAttendanceSession,
+  getBatchAttendance,
+  updateAttendanceRecord,
+  bulkUpdateAttendanceRecords,
+  debugTeacherAssignment,
 } = require("../controllers/attendanceController.js");
 const authenticate = require("../config/authMiddleware.js");
 
@@ -17,6 +18,14 @@ router.get("/batch/:id", authenticate(["academic", "manager", "admin", "teacher"
 
 // Update individual attendance record (Teacher only)
 router.put("/records/:id", authenticate(["teacher"]), updateAttendanceRecord);
+
+// Bulk update attendance records (Teacher only)
+router.post(
+  "/records/bulk-update",
+  authenticate(["teacher"]),
+  bulkUpdateAttendanceRecords
+);
+
 
 // Debug endpoint to check teacher assignment
 router.get("/debug/:batchId", authenticate(["academic", "manager", "admin", "teacher"]), debugTeacherAssignment);

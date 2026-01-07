@@ -605,9 +605,100 @@ const debugTeacherAssignment = async (req, res) => {
     }
 };
 
+// Bulk update attendance records
+const bulkUpdateAttendanceRecords = async (req, res) => {
+    try {
+        const { records } = req.body;
+        const teacherId = req.user.id;
+        const userRole = req.user.role;
+
+        if (!Array.isArray(records) || records.length === 0) {
+            return res.status(400).json({
+                success: false,
+                error: "Records array is required"
+            });
+        }
+
+        for (const record of records) {
+            const { id, status } = record;
+
+            if (!id || !['present', 'absent', 'late', 'excused'].includes(status)) {
+                return res.status(400).json({
+                    success: false,
+                    error: "Invalid record data"
+                });
+            }
+
+            // Fetch record with batch info for authorization
+            const { data: existing, error: fetchErr } = await supabase
+                .from('attendance_records')
+                .select(`
+                    id,
+                    attendance_sessions!inner(
+                        session_date,
+                        batches!inner(teacher, assistant_tutor, status)
+                    )
+                `)
+                .eq('id', id)
+                .single();
+
+            if (fetchErr || !existing) {
+                return res.status(404).json({
+                    success: false,
+                    error: `Attendance record not found: ${id}`
+                });
+            }
+
+            if (existing.attendance_sessions.batches.status !== 'Started') {
+                return res.status(400).json({
+                    success: false,
+                    error: "Batch not started"
+                });
+            }
+
+            // Authorization check
+            const isAuthorized = await isUserAuthorizedForBatch(
+                teacherId,
+                userRole,
+                existing.attendance_sessions.batches.teacher,
+                existing.attendance_sessions.batches.assistant_tutor
+            );
+
+            if (!isAuthorized) {
+                return res.status(403).json({
+                    success: false,
+                    error: "Not authorized to update attendance"
+                });
+            }
+
+            await supabase
+                .from('attendance_records')
+                .update({
+                    status,
+                    marked_at: new Date().toISOString()
+                })
+                .eq('id', id);
+        }
+
+        res.json({
+            success: true,
+            message: "Attendance updated successfully"
+        });
+
+    } catch (error) {
+        console.error("Bulk update error:", error);
+        res.status(500).json({
+            success: false,
+            error: "Internal server error"
+        });
+    }
+};
+
+
 module.exports = {
-    createAttendanceSession,
-    getBatchAttendance,
-    updateAttendanceRecord,
-    debugTeacherAssignment
+  createAttendanceSession,
+  getBatchAttendance,
+  updateAttendanceRecord,
+  bulkUpdateAttendanceRecords,
+  debugTeacherAssignment
 };

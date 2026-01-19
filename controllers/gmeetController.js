@@ -104,7 +104,100 @@ const getGMeetsByBatch = async (req, res) => {
             return 0;
         });
 
-        res.status(200).json(sortedData);
+        // Fetch attendance data for all gmeets
+        try {
+            // Get all attendance_sessions for merged batch IDs
+            const { data: attendanceSessions, error: sessionsError } = await supabase
+                .from('attendance_sessions')
+                .select('id, batch_id, session_date')
+                .in('batch_id', mergedBatchIds);
+
+            if (sessionsError) {
+                console.error('Error fetching attendance sessions:', sessionsError);
+                // If error, return gmeets without attendance data
+                return res.status(200).json(sortedData);
+            }
+
+            // Get all attendance_records for these sessions
+            const sessionIds = attendanceSessions?.map(s => s.id) || [];
+            let attendanceRecords = [];
+            
+            if (sessionIds.length > 0) {
+                const { data: records, error: recordsError } = await supabase
+                    .from('attendance_records')
+                    .select('id, session_id, status')
+                    .in('session_id', sessionIds);
+
+                if (!recordsError && records) {
+                    attendanceRecords = records;
+                }
+            }
+
+            // Create a map of session_date to attendance_session
+            const sessionMap = {};
+            attendanceSessions?.forEach(session => {
+                const dateKey = session.session_date; // Format: YYYY-MM-DD
+                if (!sessionMap[dateKey]) {
+                    sessionMap[dateKey] = [];
+                }
+                sessionMap[dateKey].push(session);
+            });
+
+            // Create a map of session_id to attendance_records
+            const recordsMap = {};
+            attendanceRecords.forEach(record => {
+                if (!recordsMap[record.session_id]) {
+                    recordsMap[record.session_id] = [];
+                }
+                recordsMap[record.session_id].push(record);
+            });
+
+            // Attach attendance data to each gmeet
+            const gmeetsWithAttendance = sortedData.map(gmeet => {
+                // Match attendance_session by date (gmeet.date format: YYYY-MM-DD)
+                if (gmeet.date && sessionMap[gmeet.date] && sessionMap[gmeet.date].length > 0) {
+                    // Find session for this batch_id
+                    const matchedSession = sessionMap[gmeet.date].find(
+                        s => mergedBatchIds.includes(s.batch_id)
+                    );
+
+                    if (matchedSession && recordsMap[matchedSession.id]) {
+                        const records = recordsMap[matchedSession.id];
+                        const presentCount = records.filter(r => r.status === 'present').length;
+                        const absentCount = records.filter(r => r.status === 'absent').length;
+                        const lateCount = records.filter(r => r.status === 'late').length;
+                        const excusedCount = records.filter(r => r.status === 'excused').length;
+
+                        return {
+                            ...gmeet,
+                            attendance: {
+                                marked: true,
+                                present_count: presentCount,
+                                absent_count: absentCount,
+                                late_count: lateCount,
+                                excused_count: excusedCount,
+                                total_students: records.length,
+                                attendance_session_id: matchedSession.id
+                            }
+                        };
+                    }
+                }
+
+                // No attendance session found for this gmeet date
+                return {
+                    ...gmeet,
+                    attendance: {
+                        marked: false
+                    }
+                };
+            });
+
+            res.status(200).json(gmeetsWithAttendance);
+        } catch (attendanceError) {
+            console.error('Error processing attendance data:', attendanceError);
+            // If error, return gmeets without attendance data
+            res.status(200).json(sortedData);
+        }
     } catch (error) {
         console.error('Error fetching GMeets:', error);
         res.status(500).json({ error: "Failed to fetch GMeets" });

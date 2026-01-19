@@ -465,23 +465,12 @@ const getEventsByDateRange = async (req, res) => {
             });
         }
 
-        // Filter out expired events (events that have passed their end date)
-        const today = new Date();
-        const todayStr = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
-        
-        const filteredData = (data || []).filter(event => {
-            // If event has an end_date, check if it's not expired
-            if (event.event_end_date) {
-                return event.event_end_date >= todayStr;
-            }
-            // If no end_date, check if start_date is not expired
-            return event.event_start_date >= todayStr;
-        });
-
+        // Return all events within the date range (including old/past events)
+        // No filtering by end date - show all events that start within the range
         res.json({
             success: true,
-            data: filteredData,
-            count: filteredData.length,
+            data: data || [],
+            count: (data || []).length,
             date_range: { start_date, end_date }
         });
 

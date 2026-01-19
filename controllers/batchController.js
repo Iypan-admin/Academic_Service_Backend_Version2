@@ -1,4 +1,5 @@
 const supabase = require("../config/supabase.js");
+const { supabaseAdmin } = require("../config/supabase.js");
 const nodemailer = require("nodemailer");
 require("dotenv").config(); // to load .env
 
@@ -90,6 +91,51 @@ const createBatch = async (req, res) => {
         if (error) {
             console.error("Database error:", error);
             return res.status(400).json({ error: error.message });
+        }
+
+        // Create notifications for assigned teachers
+        const batchName = data.batch_name || 'a new batch';
+        
+        // Notify main teacher if assigned
+        if (data.teacher) {
+            const notificationMessage = `New Batch Assigned 🎉\nYou have been assigned as the main teacher for batch "${batchName}". The batch is pending approval.`;
+            
+            const { error: mainTeacherNotifError } = await supabaseAdmin
+                .from("teacher_notifications")
+                .insert({
+                    teacher: data.teacher, // teacher_id from batches table
+                    message: notificationMessage,
+                    type: 'BATCH_ASSIGNED',
+                    related_id: data.batch_id,
+                    is_read: false
+                });
+            
+            if (mainTeacherNotifError) {
+                console.error("Error creating notification for main teacher:", mainTeacherNotifError);
+            } else {
+                console.log(`✅ Notification sent to main teacher for batch ${batchName}`);
+            }
+        }
+        
+        // Notify assistant teacher if assigned
+        if (data.assistant_tutor) {
+            const notificationMessage = `New Batch Assigned 🎉\nYou have been assigned as the assistant teacher for batch "${batchName}". The batch is pending approval.`;
+            
+            const { error: assistantNotifError } = await supabaseAdmin
+                .from("teacher_notifications")
+                .insert({
+                    teacher: data.assistant_tutor, // teacher_id from batches table
+                    message: notificationMessage,
+                    type: 'BATCH_ASSIGNED',
+                    related_id: data.batch_id,
+                    is_read: false
+                });
+            
+            if (assistantNotifError) {
+                console.error("Error creating notification for assistant teacher:", assistantNotifError);
+            } else {
+                console.log(`✅ Notification sent to assistant teacher for batch ${batchName}`);
+            }
         }
 
         res.status(201).json({
@@ -310,7 +356,7 @@ const getBatchById = async (req, res) => {
         .from("batches")
         .select(`
             *,
-            course:courses(id, course_name),
+            course:courses(id, course_name, type),
             teacher:teachers!batches_teacher_fkey(
                 teacher_id,
                 user:users(id, name)
@@ -319,7 +365,8 @@ const getBatchById = async (req, res) => {
                 teacher_id,
                 user:users(id, name)
             ),
-            center:centers(center_id, center_name)
+            center:centers(center_id, center_name),
+            enrollment:enrollment(batch)
         `)
         .eq("batch_id", id)
         .single();
@@ -329,25 +376,239 @@ const getBatchById = async (req, res) => {
         return res.status(400).json({ error: error.message });
     }
 
-    // Transform the data to flatten nested objects
+    // Fetch creator name and role using supabaseAdmin (backend should have admin access)
+    let creatorName = 'Unknown';
+    let creatorRole = null;
+    if (data.created_by) {
+        try {
+            const { data: creatorData, error: creatorError } = await supabaseAdmin
+                .from('users')
+                .select('name, role, full_name')
+                .eq('id', data.created_by)
+                .single();
+            
+            if (creatorError) {
+                console.error('❌ Error fetching creator with supabaseAdmin:', creatorError.message, creatorError);
+                // Fallback to regular supabase in case supabaseAdmin is not configured
+                const { data: fallbackData, error: fallbackError } = await supabase
+                    .from('users')
+                    .select('name, role, full_name')
+                    .eq('id', data.created_by)
+                    .single();
+                
+                if (!fallbackError && fallbackData) {
+                    creatorName = fallbackData.full_name || fallbackData.name || 'Unknown';
+                    creatorRole = fallbackData.role;
+                    console.log('✅ Creator fetched via supabase fallback:', { name: creatorName, role: creatorRole });
+                }
+            } else if (creatorData) {
+                creatorName = creatorData.full_name || creatorData.name || (creatorData.role === 'academic' ? 'Academic Coordinator' : creatorData.role);
+                creatorRole = creatorData.role;
+                console.log('✅ Creator fetched via supabaseAdmin:', { name: creatorName, role: creatorRole, id: data.created_by });
+            }
+        } catch (error) {
+            console.error('❌ Exception fetching creator:', error.message, error);
+        }
+    } else {
+        console.log('⚠️ No created_by field in batch data');
+    }
+
+    // Extract created_by UUID before transformation
+    const originalCreatedBy = data.created_by;
+    
+    // Calculate student count from enrollment
+    const studentCount = data.enrollment ? data.enrollment.length : 0;
+    
+    // Check if this batch is part of a merge group
+    let mergeInfo = null;
+    console.log('🔍 Starting merge info check for batch_id:', id);
+    try {
+        // First, check if batch exists in merge members table
+        const { data: mergeMember, error: mergeMemberError } = await supabase
+            .from('batch_merge_members')
+            .select('merge_group_id, batch_id')
+            .eq('batch_id', id)
+            .single();
+        
+        console.log('🔍 Merge member query result:', {
+            has_data: !!mergeMember,
+            mergeMember: mergeMember,
+            error: mergeMemberError,
+            error_code: mergeMemberError?.code,
+            error_message: mergeMemberError?.message
+        });
+
+        if (!mergeMemberError && mergeMember && mergeMember.merge_group_id) {
+            console.log('🔍 Found merge member for batch:', {
+                batch_id: id,
+                merge_group_id: mergeMember.merge_group_id
+            });
+            
+            // Get merge group details
+            const { data: mergeGroup, error: mergeGroupError } = await supabase
+                .from('batch_merge_groups')
+                .select('merge_group_id, merge_name, status, created_at, notes')
+                .eq('merge_group_id', mergeMember.merge_group_id)
+                .single();
+
+            if (mergeGroupError) {
+                console.error('❌ Error fetching merge group:', mergeGroupError);
+            } else if (mergeGroup) {
+                console.log('✅ Merge group found:', mergeGroup);
+                
+                // Get all batches in this merge group
+                const { data: allMergeMembers, error: allMembersError } = await supabase
+                    .from('batch_merge_members')
+                    .select('batch_id')
+                    .eq('merge_group_id', mergeMember.merge_group_id);
+
+                if (allMembersError) {
+                    console.error('❌ Error fetching merge members:', allMembersError);
+                } else if (allMergeMembers && allMergeMembers.length > 0) {
+                    console.log('✅ Found merge members:', allMergeMembers);
+                    
+                    // Get batch details for all merged batches
+                    const batchIds = allMergeMembers.map(m => m.batch_id);
+                    const { data: batchDetails, error: batchDetailsError } = await supabase
+                        .from('batches')
+                        .select('batch_id, batch_name, status')
+                        .in('batch_id', batchIds);
+
+                    if (batchDetailsError) {
+                        console.error('❌ Error fetching batch details:', batchDetailsError);
+                    } else if (batchDetails) {
+                        console.log('✅ Batch details fetched:', batchDetails);
+                        
+                        const mergedBatches = batchDetails
+                            .map(batch => ({
+                                batch_id: batch.batch_id,
+                                batch_name: batch.batch_name || 'Unknown',
+                                status: batch.status || 'Unknown'
+                            }))
+                            .filter(b => b.batch_id !== id); // Exclude current batch
+
+                        mergeInfo = {
+                            merge_group_id: mergeGroup.merge_group_id,
+                            merge_name: mergeGroup.merge_name || null,
+                            status: mergeGroup.status,
+                            created_at: mergeGroup.created_at,
+                            notes: mergeGroup.notes || null,
+                            merged_batches: mergedBatches,
+                            is_merged: true
+                        };
+
+                        console.log('✅ Merge info created for batch:', {
+                            batch_id: id,
+                            merge_group_id: mergeGroup.merge_group_id,
+                            merge_name: mergeGroup.merge_name,
+                            merged_batches_count: mergedBatches.length,
+                            merged_batches: mergedBatches.map(b => b.batch_name)
+                        });
+                    }
+                } else {
+                    console.log('⚠️ No merge members found for merge group:', mergeMember.merge_group_id);
+                }
+            } else {
+                console.log('⚠️ Merge group not found for merge_group_id:', mergeMember.merge_group_id);
+            }
+        } else {
+            console.log('ℹ️ Batch is not part of any merge group. mergeMemberError:', mergeMemberError, 'mergeMember:', mergeMember);
+        }
+    } catch (mergeError) {
+        console.error('❌ Error fetching merge info:', mergeError);
+        console.error('❌ Error stack:', mergeError.stack);
+        // Don't fail the request if merge info fails
+        mergeInfo = {
+            is_merged: false,
+            merged_batches: []
+        };
+    }
+
+    // If no merge info was found, set is_merged to false
+    if (!mergeInfo) {
+        console.log('ℹ️ No merge info found for batch, setting default:', {
+            batch_id: id,
+            mergeInfo: null
+        });
+        mergeInfo = {
+            is_merged: false,
+            merged_batches: []
+        };
+    }
+    
+    // Always log the final mergeInfo before adding to response
+    console.log('🔗 Final mergeInfo before adding to response:', {
+        batch_id: id,
+        mergeInfo: mergeInfo,
+        is_merged: mergeInfo.is_merged,
+        merged_batches_count: mergeInfo.merged_batches?.length || 0
+    });
+    
+    // Create transformed data object, explicitly setting created_by to name (not UUID)
+    // IMPORTANT: Do NOT spread ...data first as it includes created_by UUID
+    // Instead, build the object explicitly to ensure created_by is always the name
     const transformedData = {
-        ...data,
+        batch_id: data.batch_id,
+        batch_name: data.batch_name,
+        duration: data.duration,
+        max_students: data.max_students,
+        status: data.status,
+        created_at: data.created_at,
+        time_from: data.time_from,
+        time_to: data.time_to,
+        total_sessions: data.total_sessions,
+        start_date: data.start_date,
+        end_date: data.end_date,
+        course_id: data.course_id,
+        center: data.center,
+        teacher: data.teacher,
+        assistant_tutor: data.assistant_tutor,
+        approved_by: data.approved_by,
+        approved_at: data.approved_at,
+        rejection_reason: data.rejection_reason,
         course_name: data.course?.course_name,
+        course_type: data.course?.type,
         teacher_name: data.teacher?.user?.name,
         assistant_tutor_name: data.assistant_tutor?.user?.name || null,
         center_name: data.center?.center_name,
-        assistant_tutor: data.assistant_tutor ? {
+        student_count: studentCount,
+        // CRITICAL: Set created_by to name, NOT UUID
+        created_by: creatorName,
+        creator_role: creatorRole,
+        creator_id: originalCreatedBy, // Keep original UUID for reference
+        assistant_tutor_details: data.assistant_tutor ? {
             teacher_id: data.assistant_tutor.teacher_id,
             name: data.assistant_tutor.user?.name
-        } : null
+        } : null,
+        // Add merge information - ALWAYS include it, even if empty
+        merge_info: mergeInfo || {
+            is_merged: false,
+            merged_batches: []
+        }
     };
-    
-    // Remove nested objects cleanly
-    delete transformedData.course;
-    delete transformedData.teacher;
-    delete transformedData.center;
 
-    console.log('✅ Batch fetched successfully:', transformedData);
+    // Debug: Verify created_by is name, not UUID and merge info
+    console.log('✅ Batch fetched successfully. Created by:', {
+        original_uuid: originalCreatedBy,
+        transformed_name: transformedData.created_by,
+        creator_role: transformedData.creator_role,
+        isUUID: transformedData.created_by && transformedData.created_by.includes('-') && transformedData.created_by.length > 30
+    });
+    console.log('🔗 Merge info in response:', {
+        has_merge_info: !!transformedData.merge_info,
+        merge_info_type: typeof transformedData.merge_info,
+        is_merged: transformedData.merge_info?.is_merged,
+        merged_batches_count: transformedData.merge_info?.merged_batches?.length,
+        merge_info_keys: transformedData.merge_info ? Object.keys(transformedData.merge_info) : null,
+        merge_info: JSON.stringify(transformedData.merge_info)
+    });
+    
+    // Double-check: Ensure created_by is NOT a UUID before sending
+    if (transformedData.created_by && transformedData.created_by.includes('-') && transformedData.created_by.length > 30) {
+        console.error('❌ WARNING: transformedData.created_by is still a UUID! Setting to Unknown');
+        transformedData.created_by = 'Unknown';
+    }
+    
     res.json({
         success: true,
         data: transformedData
@@ -361,10 +622,10 @@ const updateBatch = async (req, res) => {
     console.log('🔍 updateBatch called with:', { id, duration, center, teacher, assistant_tutor, course_id, time_from, time_to, max_students });
 
     try {
-        // 1. Get old batch to keep batch number
+        // 1. Get old batch to keep batch number and check for teacher changes
         const { data: oldBatch, error: oldBatchError } = await supabase
             .from("batches")
-            .select("batch_name")
+            .select("batch_name, teacher, assistant_tutor")
             .eq("batch_id", id)
             .single();
 
@@ -426,8 +687,55 @@ const updateBatch = async (req, res) => {
             return res.status(400).json({ error: error.message });
         }
 
-        console.log('✅ Batch updated successfully:', data);
-        res.json({ message: "Batch updated successfully", batch: data });
+        const updatedBatch = data[0] || data;
+        const batchName = updatedBatch?.batch_name || oldBatch.batch_name;
+
+        // 6. Create notifications for newly assigned teachers
+        // Check if main teacher was changed/assigned
+        if (teacher && teacher !== oldBatch.teacher) {
+            const notificationMessage = `Batch Assigned 🎉\nYou have been assigned as the main teacher for batch "${batchName}".`;
+            
+            const { error: mainTeacherNotifError } = await supabaseAdmin
+                .from("teacher_notifications")
+                .insert({
+                    teacher: teacher, // teacher_id from batches table
+                    message: notificationMessage,
+                    type: 'BATCH_ASSIGNED',
+                    related_id: id,
+                    is_read: false
+                });
+            
+            if (mainTeacherNotifError) {
+                console.error("Error creating notification for main teacher:", mainTeacherNotifError);
+            } else {
+                console.log(`✅ Notification sent to main teacher for batch ${batchName}`);
+            }
+        }
+        
+        // Check if assistant teacher was changed/assigned
+        const newAssistantTutor = assistant_tutor !== undefined ? (assistant_tutor || null) : oldBatch.assistant_tutor;
+        if (newAssistantTutor && newAssistantTutor !== oldBatch.assistant_tutor) {
+            const notificationMessage = `Batch Assigned 🎉\nYou have been assigned as the assistant teacher for batch "${batchName}".`;
+            
+            const { error: assistantNotifError } = await supabaseAdmin
+                .from("teacher_notifications")
+                .insert({
+                    teacher: newAssistantTutor, // teacher_id from batches table
+                    message: notificationMessage,
+                    type: 'BATCH_ASSIGNED',
+                    related_id: id,
+                    is_read: false
+                });
+            
+            if (assistantNotifError) {
+                console.error("Error creating notification for assistant teacher:", assistantNotifError);
+            } else {
+                console.log(`✅ Notification sent to assistant teacher for batch ${batchName}`);
+            }
+        }
+
+        console.log('✅ Batch updated successfully:', updatedBatch);
+        res.json({ message: "Batch updated successfully", batch: updatedBatch });
     } catch (err) {
         console.error("Update batch error:", err);
         res.status(500).json({ error: "Internal server error" });
@@ -529,6 +837,40 @@ const approveStudent = async (req, res) => {
         return res.status(400).json({ error: error.message });
     }
 
+    // Create welcome notification for the student
+    try {
+        const welcomeMessage = `Welcome to ISML! 🎉\n\nYour registration has been approved.\n\nYour Registration Number: ${registrationNumber}\n\n"Education is the most powerful weapon which you can use to change the world." - Nelson Mandela\n\nWe're excited to have you on board! Start your learning journey today. 🚀`;
+
+        const { error: notifError } = await supabase
+            .from("notifications")
+            .insert({
+                student: student_id,
+                message: welcomeMessage,
+                is_read: false
+            });
+
+        if (notifError) {
+            console.error("❌ Failed to create welcome notification:", notifError);
+            // Don't fail the approval if notification creation fails
+        } else {
+            console.log(`✅ Welcome notification created for student ${student_id} with registration number ${registrationNumber}`);
+        }
+    } catch (notifErr) {
+        console.error("❌ Error creating welcome notification:", notifErr);
+        // Don't fail the approval if notification creation fails
+    }
+
+    // Validate email configuration
+    if (!process.env.MAIL_USER || !process.env.MAIL_PASSWORD) {
+        console.error("⚠️  WARNING: Email configuration missing!");
+        console.error("   Please set MAIL_USER and MAIL_PASSWORD in .env file");
+        console.error("   For Gmail, you need to use App Password (not regular password)");
+        console.error("   See GMAIL_SETUP_INSTRUCTIONS.md for details");
+        return res.status(500).json({ 
+            error: "Email configuration missing. Please configure MAIL_USER and MAIL_PASSWORD in .env file" 
+        });
+    }
+
     // Setup mail transport
     const transporter = nodemailer.createTransport({
         service: "Gmail",
@@ -561,11 +903,19 @@ const approveStudent = async (req, res) => {
             <h2 style="margin:10px 0; font-size:22px; color:#2563eb;">${registrationNumber}</h2>
           </div>
 
-          <p style="font-size:15px;">
-            You can now access ISML’s courses and resources. We’re excited to have you onboard! 🚀
+          <div style="margin:20px 0; padding:15px; border:2px dashed #10b981; border-radius:8px; text-align:center; background:#f0fdf4;">
+            <p style="margin:0; font-size:16px;">Your Password:</p>
+            <h2 style="margin:10px 0; font-size:22px; color:#10b981; font-family:monospace;">Isml@20$14!</h2>
+            <p style="margin-top:12px; font-size:13px; color:#666; font-style:italic;">
+              💡 You can change this password later using the <b>"Forget Password"</b> option on the login page.
+            </p>
+          </div>
+
+          <p style="font-size:15px; line-height:1.6;">
+            You can now access ISML's courses and resources. We're excited to have you onboard! 🚀
           </p>
           
-          <a href="https://studentportal.iypan.com/login" target="_blank"
+          <a href="https://ismlstudents.iypan.com/login" target="_blank"
             style="display:inline-block; margin-top:20px; padding:12px 20px; background:#2563eb; color:white; text-decoration:none; border-radius:6px; font-size:16px;">
             Access Your Dashboard →
           </a>
@@ -810,6 +1160,17 @@ const approveBatch = async (req, res) => {
         const { id } = req.params;
         const userId = req.user.id;
 
+        // First, fetch the batch to get teacher, assistant_tutor, and creator info
+        const { data: batchBeforeUpdate, error: fetchError } = await supabase
+            .from('batches')
+            .select('batch_id, batch_name, teacher, assistant_tutor, status, created_by')
+            .eq('batch_id', id)
+            .single();
+
+        if (fetchError || !batchBeforeUpdate) {
+            return res.status(404).json({ error: "Batch not found" });
+        }
+
         // Store the approver's UUID for proper database relationship
         const { data, error } = await supabase
             .from('batches')
@@ -830,10 +1191,137 @@ const approveBatch = async (req, res) => {
             return res.status(404).json({ error: "Batch not found" });
         }
 
+        const approvedBatch = data[0];
+        const batchName = approvedBatch.batch_name || batchBeforeUpdate.batch_name || 'a batch';
+
+        // Fetch approver's (manager/admin) full name and role for notification
+        let approverFullName = 'Manager'; // Default
+        let approverRole = req.user.role || 'manager';
+        try {
+            const { data: approverData, error: approverError } = await supabaseAdmin
+                .from('users')
+                .select('full_name, name, role')
+                .eq('id', req.user.id)
+                .single();
+            
+            if (!approverError && approverData) {
+                approverFullName = approverData.full_name || approverData.name || (approverData.role === 'admin' ? 'Admin' : approverData.role === 'manager' ? 'Manager' : approverData.role);
+                approverRole = approverData.role || approverRole;
+                console.log('✅ Approver details fetched:', { full_name: approverFullName, role: approverRole });
+            }
+        } catch (approverFetchError) {
+            console.error('❌ Error fetching approver details:', approverFetchError);
+        }
+
+        // Determine approver display name: "Manager (Full Name)" or "Admin (Full Name)"
+        const approverDisplayName = approverRole === 'admin' 
+            ? `Admin (${approverFullName})` 
+            : approverRole === 'manager' 
+            ? `Manager (${approverFullName})` 
+            : approverFullName;
+
+        // Send notification to Academic Coordinator who created the batch
+        if (approvedBatch.created_by || batchBeforeUpdate.created_by) {
+            const creatorId = approvedBatch.created_by || batchBeforeUpdate.created_by;
+            
+            // Verify that the creator is an academic coordinator
+            try {
+                const { data: creatorData, error: creatorError } = await supabaseAdmin
+                    .from('users')
+                    .select('id, role, full_name, name')
+                    .eq('id', creatorId)
+                    .single();
+                
+                if (!creatorError && creatorData && creatorData.role === 'academic') {
+                    // Format: "Batch [batch_name] approved by Manager (Full Name)" or "Batch [batch_name] approved by Admin (Full Name)"
+                    const notificationMessage = `Batch "${batchName}" approved by ${approverDisplayName}`;
+                    
+                    console.log('📧 Creating academic notification:', {
+                        academic_coordinator_id: creatorId,
+                        message: notificationMessage,
+                        batch_name: batchName,
+                        approver: approverDisplayName
+                    });
+                    
+                    const { error: academicNotifError } = await supabaseAdmin
+                        .from('academic_notifications')
+                        .insert({
+                            academic_coordinator_id: creatorId,
+                            message: notificationMessage,
+                            type: 'BATCH_APPROVED',
+                            related_id: approvedBatch.batch_id,
+                            is_read: false
+                        });
+                    
+                    if (academicNotifError) {
+                        console.error("❌ Error creating notification for academic coordinator:", academicNotifError);
+                    } else {
+                        console.log(`✅ Approval notification sent to academic coordinator (${creatorId}) for batch "${batchName}"`);
+                    }
+                } else {
+                    console.log('ℹ️ Batch creator is not an academic coordinator, skipping notification:', { 
+                        creatorId, 
+                        role: creatorData?.role,
+                        error: creatorError?.message 
+                    });
+                }
+            } catch (notifError) {
+                console.error('❌ Error in academic notification creation:', notifError);
+                // Don't fail the approval if notification fails
+            }
+        } else {
+            console.log('ℹ️ Batch has no created_by field, skipping academic notification');
+        }
+
+        // Send notifications to teachers when batch is approved
+        // Notify main teacher if assigned
+        if (approvedBatch.teacher || batchBeforeUpdate.teacher) {
+            const teacherId = approvedBatch.teacher || batchBeforeUpdate.teacher;
+            const notificationMessage = `Batch Approved 🎉\nYou have been assigned to batch "${batchName}" as the main teacher. The batch has been approved and is now active.`;
+            
+            const { error: mainTeacherNotifError } = await supabaseAdmin
+                .from("teacher_notifications")
+                .insert({
+                    teacher: teacherId, // teacher_id from batches table
+                    message: notificationMessage,
+                    type: 'BATCH_APPROVED',
+                    related_id: approvedBatch.batch_id,
+                    is_read: false
+                });
+            
+            if (mainTeacherNotifError) {
+                console.error("Error creating notification for main teacher:", mainTeacherNotifError);
+            } else {
+                console.log(`✅ Approval notification sent to main teacher for batch ${batchName}`);
+            }
+        }
+        
+        // Notify assistant teacher if assigned
+        if (approvedBatch.assistant_tutor || batchBeforeUpdate.assistant_tutor) {
+            const assistantId = approvedBatch.assistant_tutor || batchBeforeUpdate.assistant_tutor;
+            const notificationMessage = `Batch Approved 🎉\nYou have been assigned to batch "${batchName}" as the assistant teacher. The batch has been approved and is now active.`;
+            
+            const { error: assistantNotifError } = await supabaseAdmin
+                .from("teacher_notifications")
+                .insert({
+                    teacher: assistantId, // teacher_id from batches table
+                    message: notificationMessage,
+                    type: 'BATCH_APPROVED',
+                    related_id: approvedBatch.batch_id,
+                    is_read: false
+                });
+            
+            if (assistantNotifError) {
+                console.error("Error creating notification for assistant teacher:", assistantNotifError);
+            } else {
+                console.log(`✅ Approval notification sent to assistant teacher for batch ${batchName}`);
+            }
+        }
+
         res.json({
             success: true,
             message: "Batch approved successfully",
-            data: data[0]
+            data: approvedBatch
         });
     } catch (error) {
         console.error("Server error:", error);
@@ -853,6 +1341,17 @@ const rejectBatch = async (req, res) => {
 
         if (!rejection_reason) {
             return res.status(400).json({ error: "Rejection reason is required" });
+        }
+
+        // First, fetch the batch to get created_by info
+        const { data: batchBeforeUpdate, error: fetchError } = await supabase
+            .from('batches')
+            .select('batch_id, batch_name, created_by')
+            .eq('batch_id', id)
+            .single();
+
+        if (fetchError || !batchBeforeUpdate) {
+            return res.status(404).json({ error: "Batch not found" });
         }
 
         // Store the approver's UUID for proper database relationship
@@ -876,10 +1375,92 @@ const rejectBatch = async (req, res) => {
             return res.status(404).json({ error: "Batch not found" });
         }
 
+        const rejectedBatch = data[0];
+        const batchName = rejectedBatch.batch_name || batchBeforeUpdate.batch_name || 'a batch';
+
+        // Fetch approver's (manager/admin) full name and role for notification
+        let approverFullName = 'Manager'; // Default
+        let approverRole = req.user.role || 'manager';
+        try {
+            const { data: approverData, error: approverError } = await supabaseAdmin
+                .from('users')
+                .select('full_name, name, role')
+                .eq('id', req.user.id)
+                .single();
+            
+            if (!approverError && approverData) {
+                approverFullName = approverData.full_name || approverData.name || (approverData.role === 'admin' ? 'Admin' : approverData.role === 'manager' ? 'Manager' : approverData.role);
+                approverRole = approverData.role || approverRole;
+                console.log('✅ Approver details fetched for rejection:', { full_name: approverFullName, role: approverRole });
+            }
+        } catch (approverFetchError) {
+            console.error('❌ Error fetching approver details for rejection:', approverFetchError);
+        }
+
+        // Determine approver display name: "Manager (Full Name)" or "Admin (Full Name)"
+        const approverDisplayName = approverRole === 'admin' 
+            ? `Admin (${approverFullName})` 
+            : approverRole === 'manager' 
+            ? `Manager (${approverFullName})` 
+            : approverFullName;
+
+        // Send notification to Academic Coordinator who created the batch
+        if (rejectedBatch.created_by || batchBeforeUpdate.created_by) {
+            const creatorId = rejectedBatch.created_by || batchBeforeUpdate.created_by;
+            
+            // Verify that the creator is an academic coordinator
+            try {
+                const { data: creatorData, error: creatorError } = await supabaseAdmin
+                    .from('users')
+                    .select('id, role, full_name, name')
+                    .eq('id', creatorId)
+                    .single();
+                
+                if (!creatorError && creatorData && creatorData.role === 'academic') {
+                    // Format: "Batch [batch_name] rejected by Manager (Full Name)" or "Batch [batch_name] rejected by Admin (Full Name)"
+                    const notificationMessage = `Batch "${batchName}" rejected by ${approverDisplayName}. Reason: ${rejection_reason}`;
+                    
+                    console.log('📧 Creating academic rejection notification:', {
+                        academic_coordinator_id: creatorId,
+                        message: notificationMessage,
+                        batch_name: batchName,
+                        approver: approverDisplayName
+                    });
+                    
+                    const { error: academicNotifError } = await supabaseAdmin
+                        .from('academic_notifications')
+                        .insert({
+                            academic_coordinator_id: creatorId,
+                            message: notificationMessage,
+                            type: 'BATCH_REJECTED',
+                            related_id: rejectedBatch.batch_id,
+                            is_read: false
+                        });
+                    
+                    if (academicNotifError) {
+                        console.error("❌ Error creating rejection notification for academic coordinator:", academicNotifError);
+                    } else {
+                        console.log(`✅ Rejection notification sent to academic coordinator (${creatorId}) for batch "${batchName}"`);
+                    }
+                } else {
+                    console.log('ℹ️ Batch creator is not an academic coordinator, skipping rejection notification:', { 
+                        creatorId, 
+                        role: creatorData?.role,
+                        error: creatorError?.message 
+                    });
+                }
+            } catch (notifError) {
+                console.error('❌ Error in academic rejection notification creation:', notifError);
+                // Don't fail the rejection if notification fails
+            }
+        } else {
+            console.log('ℹ️ Batch has no created_by field, skipping academic rejection notification');
+        }
+
         res.json({
             success: true,
             message: "Batch rejected successfully",
-            data: data[0]
+            data: rejectedBatch
         });
     } catch (error) {
         console.error("Server error:", error);
@@ -908,22 +1489,44 @@ const createBatchRequest = async (req, res) => {
         }
 
         // Validate required fields
-        if (!duration || !teacher_id || !course_id || !time_from || !time_to) {
+        if (!duration || duration === 0 || !teacher_id || !course_id || !time_from || !time_to) {
             return res.status(400).json({
-                error: "All fields are required: duration, teacher_id, course_id, time_from, time_to"
+                error: "All fields are required: duration (must be > 0), teacher_id, course_id, time_from, time_to"
             });
         }
 
-        // Get center admin's center
+        // Validate and sanitize mode
+        const validMode = (mode === 'Online' || mode === 'Offline') ? mode : 'Offline';
+        
+        // Validate duration is a number
+        const parsedDuration = parseInt(duration);
+        if (isNaN(parsedDuration) || parsedDuration <= 0) {
+            return res.status(400).json({
+                error: "Duration must be a positive integer"
+            });
+        }
+
+        // Get center admin's center (centers table has 'state' field which is the state_id)
         const { data: centerData, error: centerError } = await supabase
             .from('centers')
-            .select('center_id, state')
+            .select('center_id, center_name, state')
             .eq('center_admin', currentUserId)
             .single();
 
         if (centerError || !centerData) {
+            console.error('❌ Error fetching center:', centerError);
             return res.status(404).json({ 
-                error: 'Center not found for this admin' 
+                error: 'Center not found for this admin',
+                details: centerError?.message
+            });
+        }
+
+        // Get state_id from centers.state field (it's a foreign key to states.state_id)
+        const stateId = centerData.state;
+        if (!stateId) {
+            console.error('❌ State ID not found in center data:', centerData);
+            return res.status(400).json({ 
+                error: 'Center does not have an associated state' 
             });
         }
 
@@ -949,29 +1552,120 @@ const createBatchRequest = async (req, res) => {
             return res.status(400).json({ error: "Invalid teacher ID" });
         }
 
+        // Validate time_from and time_to are not empty and in correct format
+        if (!time_from || !time_to) {
+            return res.status(400).json({
+                error: "Start time and end time are required"
+            });
+        }
+
+        // Ensure time format is HH:MM:SS (database TIME type expects this format)
+        const formatTime = (timeStr) => {
+            if (!timeStr) return null;
+            const trimmed = timeStr.trim();
+            // If it's already in HH:MM:SS format, return as is
+            if (trimmed.match(/^\d{2}:\d{2}:\d{2}$/)) return trimmed;
+            // If it's in HH:MM format, append :00
+            if (trimmed.match(/^\d{2}:\d{2}$/)) return trimmed + ':00';
+            return trimmed; // Return as is if format is unexpected
+        };
+
+        const formattedTimeFrom = formatTime(time_from);
+        const formattedTimeTo = formatTime(time_to);
+
         // Create the request
+        const insertData = {
+            center_id: centerData.center_id,
+            requested_by: currentUserId,
+            state_id: stateId,
+            duration: parsedDuration,
+            teacher_id,
+            course_id,
+            time_from: formattedTimeFrom,
+            time_to: formattedTimeTo,
+            max_students: parseInt(max_students) || 10,
+            mode: validMode
+        };
+
+        // Only include justification if it's provided and not empty
+        if (justification && typeof justification === 'string' && justification.trim() !== '') {
+            insertData.justification = justification.trim();
+        }
+
+        console.log('📝 Creating batch request with data:', {
+            ...insertData,
+            justification: insertData.justification || '(not provided)'
+        });
+
         const { data: requestData, error: insertError } = await supabase
             .from('batch_requests')
-            .insert([{
-                center_id: centerData.center_id,
-                requested_by: currentUserId,
-                state_id: centerData.state,
-                duration,
-                teacher_id,
-                course_id,
-                time_from,
-                time_to,
-                max_students,
-                mode,
-                justification
-            }])
+            .insert([insertData])
             .select()
             .single();
 
         if (insertError) {
-            console.error('Error creating batch request:', insertError.message);
-            return res.status(500).json({ error: 'Error creating batch request' });
+            console.error('❌ Error creating batch request:', insertError);
+            console.error('❌ Error details:', JSON.stringify(insertError, null, 2));
+            console.error('❌ Insert data that failed:', JSON.stringify(insertData, null, 2));
+            console.error('❌ Center data:', JSON.stringify(centerData, null, 2));
+            console.error('❌ State ID:', stateId);
+            
+            // Return more detailed error
+            return res.status(500).json({ 
+                error: 'Error creating batch request',
+                details: insertError.message || 'Unknown database error',
+                code: insertError.code || 'UNKNOWN',
+                hint: insertError.hint || '',
+                constraint: insertError.code === '23503' ? 'Foreign key constraint violation - check if state_id, teacher_id, or course_id exists' : 
+                          insertError.code === '23514' ? 'Check constraint violation - check if mode is "Online" or "Offline", duration > 0' :
+                          insertError.code === '23505' ? 'Unique constraint violation - duplicate entry' : ''
+            });
         }
+
+        // Get center name and course name for notification
+        const centerName = centerData?.center_name || 'Unknown Center';
+        const courseName = courseExists?.course_name || 'Unknown Course';
+
+        // Send notification to all academic coordinators
+        try {
+            // Get all academic coordinators
+            const { data: academicCoordinators, error: academicError } = await supabaseAdmin
+                .from('users')
+                .select('id')
+                .eq('role', 'academic');
+
+            if (academicError) {
+                console.error('❌ Error fetching academic coordinators:', academicError);
+            } else if (academicCoordinators && academicCoordinators.length > 0) {
+                // Create notification message
+                const notificationMessage = `Center ${centerName} has submitted a request to create ${courseName} batch.`;
+
+                // Insert notification for each academic coordinator
+                const notifications = academicCoordinators.map(coord => ({
+                    academic_coordinator_id: coord.id,
+                    message: notificationMessage,
+                    type: 'BATCH_REQUEST',
+                    related_id: requestData.request_id,
+                    is_read: false
+                }));
+
+                const { error: notificationError } = await supabaseAdmin
+                    .from('academic_notifications')
+                    .insert(notifications);
+
+                if (notificationError) {
+                    console.error('❌ Error creating notifications for academic coordinators:', notificationError);
+                } else {
+                    console.log(`✅ Batch request notifications sent to ${academicCoordinators.length} academic coordinator(s) for request "${courseName}" from "${centerName}"`);
+                }
+            } else {
+                console.log('ℹ️ No academic coordinators found to notify');
+            }
+        } catch (notifError) {
+            console.error('❌ Error in notification creation for batch request:', notifError);
+            // Don't fail the request if notification fails
+        }
+
 
         res.status(201).json({ 
             message: 'Batch request created successfully', 
@@ -1046,11 +1740,11 @@ const getBatchRequestsForAcademic = async (req, res) => {
             });
         }
 
-        // Get all requests that are state approved
+        // Get all requests that are state approved or academic approved (to show approved batches)
         const { data: requests, error: requestsError } = await supabase
             .from('batch_requests_with_details')
             .select('*')
-            .eq('status', 'state_approved')
+            .in('status', ['state_approved', 'academic_approved'])
             .order('created_at', { ascending: false });
 
         if (requestsError) {
@@ -1284,10 +1978,10 @@ const startBatch = async (req, res) => {
         const { id } = req.params;
         const { start_date, end_date, total_sessions } = req.body;
 
-        // Check if batch exists and is approved
+        // Check if batch exists and is approved - fetch teacher info too
         const { data: batch, error: batchError } = await supabase
             .from('batches')
-            .select('batch_id, status, batch_name')
+            .select('batch_id, status, batch_name, teacher, assistant_tutor')
             .eq('batch_id', id)
             .single();
 
@@ -1329,6 +2023,53 @@ const startBatch = async (req, res) => {
                 success: false, 
                 error: updateError.message 
             });
+        }
+
+        const batchName = updatedBatch.batch_name || batch.batch_name;
+
+        // Send notifications to teachers when batch is started
+        // Notify main teacher if assigned
+        if (updatedBatch.teacher || batch.teacher) {
+            const teacherId = updatedBatch.teacher || batch.teacher;
+            const notificationMessage = `Batch Started 🚀\nYour batch "${batchName}" has been started. You can now begin conducting classes and managing sessions.`;
+            
+            const { error: mainTeacherNotifError } = await supabaseAdmin
+                .from("teacher_notifications")
+                .insert({
+                    teacher: teacherId, // teacher_id from batches table
+                    message: notificationMessage,
+                    type: 'BATCH_STARTED',
+                    related_id: updatedBatch.batch_id,
+                    is_read: false
+                });
+            
+            if (mainTeacherNotifError) {
+                console.error("Error creating notification for main teacher:", mainTeacherNotifError);
+            } else {
+                console.log(`✅ Start notification sent to main teacher for batch ${batchName}`);
+            }
+        }
+        
+        // Notify assistant teacher if assigned
+        if (updatedBatch.assistant_tutor || batch.assistant_tutor) {
+            const assistantId = updatedBatch.assistant_tutor || batch.assistant_tutor;
+            const notificationMessage = `Batch Started 🚀\nThe batch "${batchName}" where you are assigned as assistant teacher has been started. You can now begin assisting with classes.`;
+            
+            const { error: assistantNotifError } = await supabaseAdmin
+                .from("teacher_notifications")
+                .insert({
+                    teacher: assistantId, // teacher_id from batches table
+                    message: notificationMessage,
+                    type: 'BATCH_STARTED',
+                    related_id: updatedBatch.batch_id,
+                    is_read: false
+                });
+            
+            if (assistantNotifError) {
+                console.error("Error creating notification for assistant teacher:", assistantNotifError);
+            } else {
+                console.log(`✅ Start notification sent to assistant teacher for batch ${batchName}`);
+            }
         }
 
         // Optionally auto-create empty gmeet rows if total_sessions is provided
@@ -1520,10 +2261,16 @@ const getBatchesForMerge = async (req, res) => {
                 batch_id,
                 batch_name,
                 status,
+                teacher,
+                assistant_tutor,
                 center:centers(center_id, center_name),
-                teacher:teachers(
+                teacher_details:teachers!batches_teacher_fkey(
                     teacher_id,
-                    user:users(name)
+                    user:users!teachers_teacher_fkey(id, name, full_name)
+                ),
+                assistant_tutor_details:teachers!batches_assistant_tutor_fkey(
+                    teacher_id,
+                    user:users!teachers_teacher_fkey(id, name, full_name)
                 ),
                 course:courses(id, course_name),
                 batch_merge_members(merge_group_id)
@@ -1552,7 +2299,8 @@ const getBatchesForMerge = async (req, res) => {
                 level: level, // Add level field
                 status: batch.status,
                 center_name: batch.center?.center_name,
-                teacher_name: batch.teacher?.user?.name,
+                teacher_name: batch.teacher_details?.user?.name || batch.teacher_details?.user?.full_name || null,
+                assistant_tutor_name: batch.assistant_tutor_details?.user?.name || batch.assistant_tutor_details?.user?.full_name || null,
                 course_name: batch.course?.course_name,
                 is_merged: batch.batch_merge_members && batch.batch_merge_members.length > 0,
                 merge_group_id: batch.batch_merge_members?.[0]?.merge_group_id || null

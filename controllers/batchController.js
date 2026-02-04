@@ -464,11 +464,7 @@ const getBatchById = async (req, res) => {
     const userRole = req.user?.role;
     const userId = req.user?.id;
 
-    console.log('🔍 getBatchById called:', {
-        batchId: id,
-        userRole,
-        userId
-    });
+
 
     const { data, error } = await supabase
         .from("batches")
@@ -517,18 +513,18 @@ const getBatchById = async (req, res) => {
                 if (!fallbackError && fallbackData) {
                     creatorName = fallbackData.full_name || fallbackData.name || 'Unknown';
                     creatorRole = fallbackData.role;
-                    console.log('✅ Creator fetched via supabase fallback:', { name: creatorName, role: creatorRole });
+
                 }
             } else if (creatorData) {
                 creatorName = creatorData.full_name || creatorData.name || (creatorData.role === 'academic' ? 'Academic Coordinator' : creatorData.role);
                 creatorRole = creatorData.role;
-                console.log('✅ Creator fetched via supabaseAdmin:', { name: creatorName, role: creatorRole, id: data.created_by });
+
             }
         } catch (error) {
             console.error('❌ Exception fetching creator:', error.message, error);
         }
     } else {
-        console.log('⚠️ No created_by field in batch data');
+
     }
 
     // Extract created_by UUID before transformation
@@ -539,7 +535,7 @@ const getBatchById = async (req, res) => {
     
     // Check if this batch is part of a merge group
     let mergeInfo = null;
-    console.log('🔍 Starting merge info check for batch_id:', id);
+
     try {
         // First, check if batch exists in merge members table
         const { data: mergeMember, error: mergeMemberError } = await supabase
@@ -548,19 +544,10 @@ const getBatchById = async (req, res) => {
             .eq('batch_id', id)
             .single();
         
-        console.log('🔍 Merge member query result:', {
-            has_data: !!mergeMember,
-            mergeMember: mergeMember,
-            error: mergeMemberError,
-            error_code: mergeMemberError?.code,
-            error_message: mergeMemberError?.message
-        });
+
 
         if (!mergeMemberError && mergeMember && mergeMember.merge_group_id) {
-            console.log('🔍 Found merge member for batch:', {
-                batch_id: id,
-                merge_group_id: mergeMember.merge_group_id
-            });
+
             
             // Get merge group details
             const { data: mergeGroup, error: mergeGroupError } = await supabase
@@ -572,7 +559,7 @@ const getBatchById = async (req, res) => {
             if (mergeGroupError) {
                 console.error('❌ Error fetching merge group:', mergeGroupError);
             } else if (mergeGroup) {
-                console.log('✅ Merge group found:', mergeGroup);
+
                 
                 // Get all batches in this merge group
                 const { data: allMergeMembers, error: allMembersError } = await supabase
@@ -583,7 +570,7 @@ const getBatchById = async (req, res) => {
                 if (allMembersError) {
                     console.error('❌ Error fetching merge members:', allMembersError);
                 } else if (allMergeMembers && allMergeMembers.length > 0) {
-                    console.log('✅ Found merge members:', allMergeMembers);
+
                     
                     // Get batch details for all merged batches
                     const batchIds = allMergeMembers.map(m => m.batch_id);
@@ -595,7 +582,7 @@ const getBatchById = async (req, res) => {
                     if (batchDetailsError) {
                         console.error('❌ Error fetching batch details:', batchDetailsError);
                     } else if (batchDetails) {
-                        console.log('✅ Batch details fetched:', batchDetails);
+
                         
                         const mergedBatches = batchDetails
                             .map(batch => ({
@@ -615,22 +602,16 @@ const getBatchById = async (req, res) => {
                             is_merged: true
                         };
 
-                        console.log('✅ Merge info created for batch:', {
-                            batch_id: id,
-                            merge_group_id: mergeGroup.merge_group_id,
-                            merge_name: mergeGroup.merge_name,
-                            merged_batches_count: mergedBatches.length,
-                            merged_batches: mergedBatches.map(b => b.batch_name)
-                        });
+
                     }
                 } else {
-                    console.log('⚠️ No merge members found for merge group:', mergeMember.merge_group_id);
+
                 }
             } else {
-                console.log('⚠️ Merge group not found for merge_group_id:', mergeMember.merge_group_id);
+
             }
         } else {
-            console.log('ℹ️ Batch is not part of any merge group. mergeMemberError:', mergeMemberError, 'mergeMember:', mergeMember);
+
         }
     } catch (mergeError) {
         console.error('❌ Error fetching merge info:', mergeError);
@@ -644,10 +625,7 @@ const getBatchById = async (req, res) => {
 
     // If no merge info was found, set is_merged to false
     if (!mergeInfo) {
-        console.log('ℹ️ No merge info found for batch, setting default:', {
-            batch_id: id,
-            mergeInfo: null
-        });
+
         mergeInfo = {
             is_merged: false,
             merged_batches: []
@@ -655,12 +633,7 @@ const getBatchById = async (req, res) => {
     }
     
     // Always log the final mergeInfo before adding to response
-    console.log('🔗 Final mergeInfo before adding to response:', {
-        batch_id: id,
-        mergeInfo: mergeInfo,
-        is_merged: mergeInfo.is_merged,
-        merged_batches_count: mergeInfo.merged_batches?.length || 0
-    });
+
     
     // Create transformed data object, explicitly setting created_by to name (not UUID)
     // IMPORTANT: Do NOT spread ...data first as it includes created_by UUID
@@ -706,20 +679,8 @@ const getBatchById = async (req, res) => {
     };
 
     // Debug: Verify created_by is name, not UUID and merge info
-    console.log('✅ Batch fetched successfully. Created by:', {
-        original_uuid: originalCreatedBy,
-        transformed_name: transformedData.created_by,
-        creator_role: transformedData.creator_role,
-        isUUID: transformedData.created_by && transformedData.created_by.includes('-') && transformedData.created_by.length > 30
-    });
-    console.log('🔗 Merge info in response:', {
-        has_merge_info: !!transformedData.merge_info,
-        merge_info_type: typeof transformedData.merge_info,
-        is_merged: transformedData.merge_info?.is_merged,
-        merged_batches_count: transformedData.merge_info?.merged_batches?.length,
-        merge_info_keys: transformedData.merge_info ? Object.keys(transformedData.merge_info) : null,
-        merge_info: JSON.stringify(transformedData.merge_info)
-    });
+
+
     
     // Double-check: Ensure created_by is NOT a UUID before sending
     if (transformedData.created_by && transformedData.created_by.includes('-') && transformedData.created_by.length > 30) {
@@ -737,7 +698,7 @@ const updateBatch = async (req, res) => {
     const { id } = req.params;
     const { duration, center, teacher, assistant_tutor, course_id, time_from, time_to, max_students } = req.body;
 
-    console.log('🔍 updateBatch called with:', { id, duration, center, teacher, assistant_tutor, course_id, time_from, time_to, max_students });
+
 
     try {
         // 1. Get old batch to keep batch number and check for teacher changes
@@ -792,7 +753,7 @@ const updateBatch = async (req, res) => {
             updateData.assistant_tutor = assistant_tutor || null;
         }
         
-        console.log('📝 Updating batch with data:', updateData);
+
         
         const { data, error } = await supabase
             .from("batches")

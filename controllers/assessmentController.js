@@ -34,10 +34,7 @@ const setBatchAssessmentDate = async (req, res) => {
       return res.status(400).json({ error: 'Assessment date is required' });
     }
     
-    console.log('=== setBatchAssessmentDate Debug ===');
-    console.log('BatchId:', batchId);
-    console.log('Assessment Date:', assessmentDate);
-    console.log('User ID:', req.user.id);
+
     
     // Check if assessment date already exists for this batch
     const existingDate = await getBatchAssessmentDate(batchId);
@@ -276,14 +273,10 @@ const saveBatchMarks = async (req, res) => {
     const { batchId } = req.params;
     const { marks, assessmentDate } = req.body; // Array of { studentId, marksData } and assessmentDate
     
-    console.log('=== saveBatchMarks Debug ===');
-    console.log('BatchId:', batchId);
-    console.log('Marks received:', marks.length);
-    console.log('Assessment Date:', assessmentDate);
-    console.log('User ID:', req.user.id);
+
     
     const courseLanguage = await getCourseLanguage(batchId);
-    console.log('Course Language:', courseLanguage);
+
     
     // Check if assessment records already exist for this batch to get existing assessment date
     let finalAssessmentDate = assessmentDate;
@@ -297,9 +290,9 @@ const saveBatchMarks = async (req, res) => {
       if (existingRecords && existingRecords.length > 0 && existingRecords[0].assessment_date) {
         // Use existing assessment date, ignore the provided one
         finalAssessmentDate = existingRecords[0].assessment_date;
-        console.log('Using existing assessment date:', finalAssessmentDate);
+
       } else {
-        console.log('Using new assessment date:', finalAssessmentDate);
+
       }
     }
     
@@ -308,12 +301,11 @@ const saveBatchMarks = async (req, res) => {
     for (const markData of marks) {
       const { studentId, marksData } = markData;
       
-      console.log('Processing student:', studentId);
-      console.log('Marks data:', marksData);
+
       
       // Handle undefined marksData
       if (!marksData) {
-        console.log('Skipping student - no marks data provided');
+
         continue;
       }
       
@@ -325,12 +317,12 @@ const saveBatchMarks = async (req, res) => {
         .eq('student_id', studentId)
         .single();
 
-      console.log('Existing record error:', fetchError);
+
 
       let assessmentRecord;
       
       if (existingRecord) {
-        console.log('Updating existing record');
+
         // Update existing record
         const updateData = {
           course_language: courseLanguage,
@@ -364,7 +356,7 @@ const saveBatchMarks = async (req, res) => {
           updateData.status = marksData.status;
         }
 
-        console.log('Update data:', updateData);
+
 
         const { data: updatedRecord, error: updateError } = await supabase
           .from('assessment_marks')
@@ -373,12 +365,12 @@ const saveBatchMarks = async (req, res) => {
           .select()
           .single();
 
-        console.log('Update error:', updateError);
+
         if (updateError) throw updateError;
         assessmentRecord = updatedRecord;
         
       } else {
-        console.log('Creating new record');
+
         // Create new record
         const insertData = {
           batch_id: batchId,
@@ -410,7 +402,7 @@ const saveBatchMarks = async (req, res) => {
           insertData.japanese_listening_marks = marksData.japanese_listening_marks || 0;
         }
 
-        console.log('Insert data:', insertData);
+
 
         const { data: newRecord, error: insertError } = await supabase
           .from('assessment_marks')
@@ -418,7 +410,7 @@ const saveBatchMarks = async (req, res) => {
           .select()
           .single();
 
-        console.log('Insert error:', insertError);
+
         if (insertError) throw insertError;
         assessmentRecord = newRecord;
       }
@@ -426,7 +418,7 @@ const saveBatchMarks = async (req, res) => {
       results.push(assessmentRecord);
     }
     
-    console.log('Results count:', results.length);
+
     
     res.json({
       success: true,
@@ -447,12 +439,10 @@ const submitBatchMarks = async (req, res) => {
   try {
     const { batchId } = req.params;
     
-    console.log('=== submitBatchMarks Debug ===');
-    console.log('BatchId:', batchId);
-    console.log('User ID:', req.user.id);
+
     
     // Update all assessment marks for this batch to 'submitted' status
-    console.log('Updating assessment marks status...');
+
     const { error: updateError } = await supabase
       .from('assessment_marks')
       .update({
@@ -463,20 +453,19 @@ const submitBatchMarks = async (req, res) => {
       .eq('batch_id', batchId)
       .neq('status', 'approved');
 
-    console.log('Assessment marks update error:', updateError);
+
 
     if (updateError) throw updateError;
     
     // Update batch status to 'completed' (only if not already completed)
-    console.log('Updating batch status...');
+
     const { data: currentBatch, error: fetchBatchError } = await supabase
       .from('batches')
       .select('status')
       .eq('batch_id', batchId)
       .single();
 
-    console.log('Current batch status:', currentBatch?.status);
-    console.log('Fetch batch error:', fetchBatchError);
+
 
     if (fetchBatchError) throw fetchBatchError;
 
@@ -490,14 +479,14 @@ const submitBatchMarks = async (req, res) => {
         .eq('batch_id', batchId);
       
       batchUpdateError = updateError;
-      console.log('Batch update error:', batchUpdateError);
+
     } else {
-      console.log('Batch is already completed, skipping update');
+
     }
 
     if (batchUpdateError) throw batchUpdateError;
     
-    console.log('Submit successful!');
+
     
     res.json({
       success: true,

@@ -2,22 +2,17 @@ const supabase = require("../config/supabase.js");
 
 // Helper function to check if user is authorized for batch operations
 const isUserAuthorizedForBatch = async (userId, userRole, batchTeacherId, batchAssistantTutorId = null) => {
-    console.log('🔍 isUserAuthorizedForBatch called:', {
-        userId,
-        userRole,
-        batchTeacherId,
-        batchAssistantTutorId
-    });
+
     
     if (['academic', 'manager', 'admin'].includes(userRole)) {
-        console.log('✅ Admin role - authorized');
+
         return true; // Admin roles can access all batches
     }
     
     if (userRole === 'teacher') {
         // Check if user is the main teacher
         if (batchTeacherId) {
-        console.log('🔍 Looking up teacher record for teacher_id:', batchTeacherId);
+
         const { data: teacherRecord, error: teacherError } = await supabase
             .from('teachers')
             .select('*')
@@ -25,14 +20,14 @@ const isUserAuthorizedForBatch = async (userId, userRole, batchTeacherId, batchA
             .single();
         
             if (!teacherError && teacherRecord && teacherRecord.teacher === userId) {
-                console.log('✅ User is the main teacher - authorized');
+
                 return true;
             }
         }
         
         // Check if user is the assistant tutor
         if (batchAssistantTutorId) {
-            console.log('🔍 Looking up assistant tutor record for teacher_id:', batchAssistantTutorId);
+
             const { data: assistantTutorRecord, error: assistantTutorError } = await supabase
                 .from('teachers')
                 .select('*')
@@ -40,16 +35,16 @@ const isUserAuthorizedForBatch = async (userId, userRole, batchTeacherId, batchA
                 .single();
             
             if (!assistantTutorError && assistantTutorRecord && assistantTutorRecord.teacher === userId) {
-                console.log('✅ User is the assistant tutor - authorized');
+
                 return true;
         }
         }
         
-        console.log('❌ User is neither main teacher nor assistant tutor');
+
         return false;
     }
     
-    console.log('❌ No authorization - role not allowed');
+
     return false;
 };
 
@@ -178,11 +173,10 @@ const createAttendanceSession = async (req, res) => {
             });
         }
 
-        console.log('🔍 Enrolled students with user_id:', enrollments);
-        console.log('🔍 Number of enrolled students:', enrollments.length);
+
 
         if (enrollments.length === 0) {
-            console.log('⚠️ No enrolled students found for this batch');
+
             return res.status(400).json({ 
                 success: false, 
                 error: 'No students are enrolled in this batch.' 
@@ -196,7 +190,7 @@ const createAttendanceSession = async (req, res) => {
             status: 'absent'
         }));
 
-        console.log('🔍 Attendance records to create:', attendanceRecords);
+
 
         const { data: records, error: createRecordsError } = await supabase
             .from('attendance_records')
@@ -246,11 +240,7 @@ const getBatchAttendance = async (req, res) => {
             .eq('batch_id', id)
             .single();
 
-        console.log('🔍 Batch lookup result:', {
-            batch,
-            batchError,
-            batchId: id
-        });
+
 
         if (batchError || !batch) {
             return res.status(404).json({ 
@@ -290,13 +280,7 @@ const getBatchAttendance = async (req, res) => {
             }
         }
         
-        console.log('🔍 Authorization check:', {
-            userRole,
-            userId,
-            batchTeacher: batch.teacher,
-            batchId: id,
-            isAuthorized
-        });
+
         
         if (!isAuthorized) {
             return res.status(403).json({ 
@@ -372,11 +356,7 @@ const getBatchAttendance = async (req, res) => {
         const sessionsWithRecords = sessions.map(session => {
             const sessionRecords = allRecords.filter(record => record.session_id === session.id);
             
-            console.log(`🔍 Session ${session.id} records:`, {
-                sessionId: session.id,
-                sessionRecords,
-                totalRecords: sessionRecords.length
-            });
+
             
             // Filter records based on user role
             let filteredRecords = sessionRecords;
@@ -392,7 +372,7 @@ const getBatchAttendance = async (req, res) => {
                 marked_at: record.marked_at
             }));
 
-            console.log(`🔍 Session ${session.id} mapped records:`, mappedRecords);
+
 
             return {
                 ...session,
@@ -548,11 +528,7 @@ const debugTeacherAssignment = async (req, res) => {
         const userId = req.user.id;
         const userRole = req.user.role;
 
-        console.log('🔍 Debug teacher assignment:', {
-            batchId,
-            userId,
-            userRole
-        });
+
 
         // Get batch info
         const { data: batch, error: batchError } = await supabase

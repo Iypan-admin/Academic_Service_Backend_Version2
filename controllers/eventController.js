@@ -165,15 +165,14 @@ const getEventById = async (req, res) => {
 // =====================================================
 const createEvent = async (req, res) => {
     try {
-        console.log('Create event request received:', req.body);
-        console.log('User info:', req.user);
+
         
         const userRole = req.user.role;
         const userId = req.user.id;
 
         // Check if user has permission to create events
         if (userRole !== 'academic' && userRole !== 'admin') {
-            console.log('Access denied for role:', userRole);
+
             return res.status(403).json({ 
                 success: false, 
                 error: 'Access denied. Only Academic Admin and Admin can create events.' 
@@ -235,7 +234,7 @@ const createEvent = async (req, res) => {
             created_by: userId
         };
 
-        console.log('Event data to insert:', eventData);
+
 
         const { data, error } = await supabase
             .from('academic_events')

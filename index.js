@@ -13,6 +13,8 @@ const lsrwRoutes = require("./routes/lsrwRoutes.js");
 const speakingRoutes = require("./routes/speakingRoutes.js");
 const readingRoutes = require("./routes/readingRoutes.js");
 const writingRoutes = require("./routes/writingRoutes.js");
+const certificateRoutes = require("./routes/certificateRoutes.js");
+const assessmentRoutes = require("./routes/assessmentRoutes.js");
 
 dotenv.config();
 
@@ -33,6 +35,8 @@ app.use("/api/lsrw", lsrwRoutes);
 app.use("/api/speaking", speakingRoutes);
 app.use("/api/reading", readingRoutes);
 app.use("/api/writing", writingRoutes);
+app.use("/api/certificates", certificateRoutes);
+app.use("/api/assessment", assessmentRoutes);
 
 // Student-specific routes
 app.use("/api/classes", require("./routes/studentClassRoutes.js"));

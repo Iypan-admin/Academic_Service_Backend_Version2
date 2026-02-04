@@ -525,7 +525,22 @@ const getUpcomingEvents = async (req, res) => {
             .order('event_start_time', { ascending: true })
             .limit(parseInt(limit));
 
-        const { data, error } = await query;
+        // Helper to retry failed fetches
+        const fetchWithRetry = async (queryFn, retries = 3) => {
+            for (let i = 0; i < retries; i++) {
+                try {
+                    return await queryFn();
+                } catch (err) {
+                    if (i === retries - 1) throw err; // Throw on last attempt
+                    // Wait before retry (exponential backoff)
+                    const delay = 500 * Math.pow(2, i);
+                    console.warn(`Query failed, retrying in ${delay}ms... (${i + 1}/${retries})`);
+                    await new Promise(resolve => setTimeout(resolve, delay));
+                }
+            }
+        };
+
+        const { data, error } = await fetchWithRetry(() => query);
 
         if (error) {
             // Check if it's a network/connection error

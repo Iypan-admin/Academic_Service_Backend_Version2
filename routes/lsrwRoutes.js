@@ -12,10 +12,18 @@ const {
     submitStudentAnswers,
     getStudentResults,
     getStudentSubmissions,
-    verifyStudentSubmission
+    verifyStudentSubmission,
+    getDashboardStats,
+    getAllLSRWContent
 } = require("../controllers/lsrwController.js");
 
 const router = express.Router();
+
+// Resource Manager routes - All Content view (Optimized)
+router.get("/all-content", authenticate("resource_manager"), getAllLSRWContent);
+
+// Resource Manager routes - Dashboard Stats (New Optimized Endpoint)
+router.get("/dashboard-stats", authenticate("resource_manager"), getDashboardStats);
 
 // Resource Manager routes - Upload LSRW content
 router.post("/upload", authenticate("resource_manager"), lsrwUpload, uploadLSRWContent);

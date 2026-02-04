@@ -31,11 +31,15 @@ const authenticate = (requiredRoles) => {
             }
 
             // Support both single role and array of roles
-            const allowedRoles = Array.isArray(requiredRoles) ? requiredRoles : [requiredRoles];
+            const allowedRoles = Array.isArray(requiredRoles) 
+                ? requiredRoles.map(r => r.toLowerCase()) 
+                : [requiredRoles.toLowerCase()];
             
-            if (!allowedRoles.includes(decoded.role)) {
+            const userRole = (decoded.role || "").toLowerCase();
+            
+            if (!allowedRoles.includes(userRole)) {
                 return res.status(403).json({ 
-                    error: `Access Denied. Only ${allowedRoles.join(', ')} are allowed.` 
+                    error: `Access Denied. Role "${decoded.role}" is not authorized. Allowed: ${requiredRoles.join(', ')}` 
                 });
             }
 

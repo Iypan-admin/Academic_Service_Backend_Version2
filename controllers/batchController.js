@@ -138,6 +138,124 @@ const createBatch = async (req, res) => {
             }
         }
 
+        // ✅ Notify all managers when batch is created and waiting for approval
+        try {
+            // Fetch all managers
+            const { data: managers, error: managersError } = await supabaseAdmin
+                .from('users')
+                .select('id, full_name, name')
+                .eq('role', 'manager')
+                .eq('status', true); // Only active managers
+            
+            if (!managersError && managers && managers.length > 0) {
+                // Get academic coordinator name who created the batch
+                let academicName = 'Academic Coordinator';
+                if (data.created_by) {
+                    try {
+                        const { data: academicData } = await supabaseAdmin
+                            .from('users')
+                            .select('full_name, name')
+                            .eq('id', data.created_by)
+                            .single();
+                        
+                        if (academicData) {
+                            academicName = academicData.full_name || academicData.name || 'Academic Coordinator';
+                        }
+                    } catch (err) {
+                        console.error('Error fetching academic coordinator name:', err);
+                    }
+                }
+
+                // Create notifications for all managers
+                const managerNotifications = managers.map(manager => ({
+                    manager_id: manager.id,
+                    message: `New Batch Waiting for Approval 📋\nBatch "${batchName}" has been created by ${academicName} and is waiting for your approval.`,
+                    type: 'BATCH_PENDING_APPROVAL',
+                    is_read: false,
+                    metadata: {
+                        batch_id: data.batch_id,
+                        batch_name: batchName,
+                        created_by: data.created_by,
+                        created_by_name: academicName
+                    }
+                }));
+
+                const { error: managerNotifError } = await supabaseAdmin
+                    .from('manager_notifications')
+                    .insert(managerNotifications);
+                
+                if (managerNotifError) {
+                    console.error("❌ Error creating manager notifications:", managerNotifError);
+                } else {
+                    console.log(`✅ Notifications sent to ${managers.length} manager(s) for pending batch "${batchName}"`);
+                }
+            } else {
+                console.log('ℹ️ No active managers found to notify about pending batch');
+            }
+        } catch (managerNotifErr) {
+            console.error('❌ Error in manager notification creation:', managerNotifErr);
+            // Don't fail batch creation if notification fails
+        }
+
+        // ✅ Notify all admins when batch is created and waiting for approval
+        try {
+            // Fetch all admins
+            const { data: admins, error: adminsError } = await supabaseAdmin
+                .from('users')
+                .select('id, full_name, name')
+                .eq('role', 'admin')
+                .eq('status', true); // Only active admins
+            
+            if (!adminsError && admins && admins.length > 0) {
+                // Get academic coordinator name who created the batch
+                let academicName = 'Academic Coordinator';
+                if (data.created_by) {
+                    try {
+                        const { data: academicData } = await supabaseAdmin
+                            .from('users')
+                            .select('full_name, name')
+                            .eq('id', data.created_by)
+                            .single();
+                        
+                        if (academicData) {
+                            academicName = academicData.full_name || academicData.name || 'Academic Coordinator';
+                        }
+                    } catch (err) {
+                        console.error('Error fetching academic coordinator name:', err);
+                    }
+                }
+
+                // Create notifications for all admins
+                const adminNotifications = admins.map(admin => ({
+                    admin_id: admin.id,
+                    message: `New Batch Waiting for Approval 📋\nBatch "${batchName}" has been created by ${academicName} and is waiting for approval.`,
+                    type: 'BATCH_PENDING_APPROVAL',
+                    is_read: false,
+                    metadata: {
+                        batch_id: data.batch_id,
+                        batch_name: batchName,
+                        created_by: data.created_by,
+                        created_by_name: academicName
+                    }
+                }));
+
+                const { error: adminNotifError } = await supabaseAdmin
+                    .from('admin_notifications')
+                    .insert(adminNotifications);
+                
+                if (adminNotifError) {
+                    console.error("❌ Error creating admin notifications:", adminNotifError);
+                } else {
+                    console.log(`✅ Notifications sent to ${admins.length} admin(s) for pending batch "${batchName}"`);
+                }
+            } else {
+                console.log('ℹ️ No active admins found to notify about pending batch');
+            }
+        } catch (adminNotifErr) {
+            console.error('❌ Error in admin notification creation:', adminNotifErr);
+            // Don't fail batch creation if notification fails
+        }
+
         res.status(201).json({
             message: "Batch created successfully and is pending approval",
             batch: {
@@ -1271,6 +1389,144 @@ const approveBatch = async (req, res) => {
             }
         } else {
             console.log('ℹ️ Batch has no created_by field, skipping academic notification');
+        }
+
+        // ✅ Notify all managers when batch is approved
+        try {
+            // Fetch all managers (excluding the approver if approver is a manager)
+            let managersQuery = supabaseAdmin
+                .from('users')
+                .select('id, full_name, name')
+                .eq('role', 'manager')
+                .eq('status', true); // Only active managers
+            
+            // If approver is a manager, exclude them from notifications (they already know)
+            if (approverRole === 'manager') {
+                managersQuery = managersQuery.neq('id', req.user.id);
+            }
+            
+            const { data: managers, error: managersError } = await managersQuery;
+            
+            if (!managersError && managers && managers.length > 0) {
+                // Get academic coordinator name who created the batch
+                let academicName = 'Academic Coordinator';
+                if (approvedBatch.created_by || batchBeforeUpdate.created_by) {
+                    const creatorId = approvedBatch.created_by || batchBeforeUpdate.created_by;
+                    try {
+                        const { data: academicData } = await supabaseAdmin
+                            .from('users')
+                            .select('full_name, name')
+                            .eq('id', creatorId)
+                            .single();
+                        
+                        if (academicData) {
+                            academicName = academicData.full_name || academicData.name || 'Academic Coordinator';
+                        }
+                    } catch (err) {
+                        console.error('Error fetching academic coordinator name:', err);
+                    }
+                }
+
+                // Create notifications for all managers
+                const managerNotifications = managers.map(manager => ({
+                    manager_id: manager.id,
+                    message: `Batch Approved ✅\nBatch "${batchName}" created by ${academicName} has been approved by ${approverDisplayName}.`,
+                    type: 'BATCH_APPROVED',
+                    is_read: false,
+                    metadata: {
+                        batch_id: approvedBatch.batch_id,
+                        batch_name: batchName,
+                        approved_by: req.user.id,
+                        approved_by_name: approverDisplayName,
+                        created_by: approvedBatch.created_by || batchBeforeUpdate.created_by,
+                        created_by_name: academicName
+                    }
+                }));
+
+                const { error: managerNotifError } = await supabaseAdmin
+                    .from('manager_notifications')
+                    .insert(managerNotifications);
+                
+                if (managerNotifError) {
+                    console.error("❌ Error creating manager notifications for approval:", managerNotifError);
+                } else {
+                    console.log(`✅ Approval notifications sent to ${managers.length} manager(s) for batch "${batchName}"`);
+                }
+            } else {
+                console.log('ℹ️ No active managers found to notify about batch approval');
+            }
+        } catch (managerNotifErr) {
+            console.error('❌ Error in manager notification creation for approval:', managerNotifErr);
+            // Don't fail the approval if notification fails
+        }
+
+        // ✅ Notify all admins when batch is approved
+        try {
+            // Fetch all admins (excluding approver if approver is an admin)
+            let adminsQuery = supabaseAdmin
+                .from('users')
+                .select('id, full_name, name')
+                .eq('role', 'admin')
+                .eq('status', true); // Only active admins
+            
+            // If approver is an admin, exclude them from notifications (they already know)
+            if (approverRole === 'admin') {
+                adminsQuery = adminsQuery.neq('id', req.user.id);
+            }
+            
+            const { data: admins, error: adminsError } = await adminsQuery;
+            
+            if (!adminsError && admins && admins.length > 0) {
+                // Get academic coordinator name who created batch
+                let academicName = 'Academic Coordinator';
+                if (approvedBatch.created_by || batchBeforeUpdate.created_by) {
+                    const creatorId = approvedBatch.created_by || batchBeforeUpdate.created_by;
+                    try {
+                        const { data: academicData } = await supabaseAdmin
+                            .from('users')
+                            .select('full_name, name')
+                            .eq('id', creatorId)
+                            .single();
+                        
+                        if (academicData) {
+                            academicName = academicData.full_name || academicData.name || 'Academic Coordinator';
+                        }
+                    } catch (err) {
+                        console.error('Error fetching academic coordinator name:', err);
+                    }
+                }
+
+                // Create notifications for all admins
+                const adminNotifications = admins.map(admin => ({
+                    admin_id: admin.id,
+                    message: `Batch Approved ✅\nBatch "${batchName}" created by ${academicName} has been approved by ${approverDisplayName}.`,
+                    type: 'BATCH_APPROVED',
+                    is_read: false,
+                    metadata: {
+                        batch_id: approvedBatch.batch_id,
+                        batch_name: batchName,
+                        approved_by: req.user.id,
+                        approved_by_name: approverDisplayName,
+                        created_by: approvedBatch.created_by || batchBeforeUpdate.created_by,
+                        created_by_name: academicName
+                    }
+                }));
+
+                const { error: adminNotifError } = await supabaseAdmin
+                    .from('admin_notifications')
+                    .insert(adminNotifications);
+                
+                if (adminNotifError) {
+                    console.error("❌ Error creating admin notifications for approval:", adminNotifError);
+                } else {
+                    console.log(`✅ Approval notifications sent to ${admins.length} admin(s) for batch "${batchName}"`);
+                }
+            } else {
+                console.log('ℹ️ No active admins found to notify about batch approval');
+            }
+        } catch (adminNotifErr) {
+            console.error('❌ Error in admin notification creation for approval:', adminNotifErr);
+            // Don't fail the approval if notification fails
         }
 
         // Send notifications to teachers when batch is approved

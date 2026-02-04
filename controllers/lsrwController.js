@@ -5369,3 +5369,477 @@ exports.submitWritingSubmission = async (req, res) => {
     }
 };
 
+/**
+ * Get Dashboard Statistics and All Content (Optimized Bulk Fetch)
+ * GET /api/lsrw/dashboard-stats
+ */
+exports.getDashboardStats = async (req, res) => {
+    try {
+        console.log("Fetching LSRW Dashboard Stats...");
+
+        // Helper to retry failed fetches (network errors)
+        const fetchWithRetry = async (queryFn, retries = 3) => {
+            for (let i = 0; i < retries; i++) {
+                try {
+                    // queryFn() should return the promise from supabase
+                    return await queryFn();
+                } catch (err) {
+                    const isLastAttempt = i === retries - 1;
+                    if (isLastAttempt) {
+                        console.error(`Query failed after ${retries} attempts:`, err.message);
+                        // Return error structure consistent with Supabase response
+                        return { error: err, data: null };
+                    }
+                    // Wait before retry (exponential backoff: 500ms, 1000ms, 2000ms)
+                    const delay = 500 * Math.pow(2, i);
+                    console.warn(`Query failed, retrying in ${delay}ms... (${i + 1}/${retries})`);
+                    await new Promise(resolve => setTimeout(resolve, delay));
+                }
+            }
+        };
+
+        // Run all queries in parallel for maximum performance, but with individual error handling/retries
+        const [
+            listeningRes,
+            speakingRes,
+            readingRes,
+            writingRes,
+            coursesRes
+        ] = await Promise.all([
+            // 1. Listening (LSRW Content with module_type='listening')
+            fetchWithRetry(() => supabase
+                .from('lsrw_content')
+                .select('id, title, course_id, created_at, module_type')
+                .eq('module_type', 'listening')
+                .order('created_at', { ascending: false })),
+
+            // 2. Speaking
+            fetchWithRetry(() => supabase
+                .from('speaking_materials')
+                .select('id, title, course_id, created_at')
+                .order('created_at', { ascending: false })),
+
+            // 3. Reading
+            fetchWithRetry(() => supabase
+                .from('reading_materials')
+                .select('id, title, course_id, created_at')
+                .order('created_at', { ascending: false })),
+
+            // 4. Writing
+            fetchWithRetry(() => supabase
+                .from('writing_tasks')
+                .select('id, title, course_id, created_at')
+                .order('created_at', { ascending: false })),
+            
+            // 5. Courses (for name mapping)
+            fetchWithRetry(() => supabase
+                .from('courses')
+                .select('id, course_name'))
+        ]);
+
+        // Error handling for queries
+        if (listeningRes.error) console.error("Listening Error:", listeningRes.error);
+        if (speakingRes.error) console.error("Speaking Error:", speakingRes.error);
+        if (readingRes.error) console.error("Reading Error:", readingRes.error);
+        if (writingRes.error) console.error("Writing Error:", writingRes.error);
+
+        // Process Data
+        const listeningData = listeningRes.data || [];
+        const speakingData = speakingRes.data || [];
+        const readingData = readingRes.data || [];
+        const writingData = writingRes.data || [];
+        const courses = coursesRes.data || [];
+
+        // Create Course Map
+        const courseMap = new Map();
+        courses.forEach(c => courseMap.set(c.id, c.course_name));
+
+        // Format Items Helper
+        const formatItems = (items, type) => items.map(item => ({
+            id: item.id,
+            title: item.title,
+            course_id: item.course_id,
+            course_name: courseMap.get(item.course_id) || 'Unknown Course',
+            module_type: type,
+            created_at: item.created_at
+        }));
+
+        // Combine All Items
+        const allItems = [
+            ...formatItems(listeningData, 'listening'),
+            ...formatItems(speakingData, 'speaking'),
+            ...formatItems(readingData, 'reading'),
+            ...formatItems(writingData, 'writing')
+        ];
+
+        // 1. Total Stats
+        const stats = {
+            listening: listeningData.length,
+            speaking: speakingData.length,
+            reading: readingData.length,
+            writing: writingData.length,
+            total: allItems.length
+        };
+
+        // 2. Recent Uploads (Top 10 sorted by date)
+        const recentUploads = [...allItems]
+            .sort((a, b) => new Date(b.created_at) - new Date(a.created_at))
+            .slice(0, 10);
+
+        // 3. Course Distribution
+        const courseStats = {};
+        allItems.forEach(item => {
+            const cName = item.course_name;
+            courseStats[cName] = (courseStats[cName] || 0) + 1;
+        });
+
+        const courseDistribution = Object.entries(courseStats)
+            .map(([name, count]) => ({ name, count }))
+            .sort((a, b) => b.count - a.count)
+            .slice(0, 10); // Top 10 courses
+
+        res.json({
+            success: true,
+            stats,
+            recentUploads,
+            courseDistribution
+        });
+
+    } catch (error) {
+        console.error("Dashboard Stats Error:", error);
+        res.status(500).json({ error: error.message || "Internal server error" });
+    }
+};
+
+/**
+ * Get ALL LSRW Content grouped by Course (Optimized for File View)
+ * GET /api/lsrw/all-content
+ */
+exports.getAllLSRWContent = async (req, res) => {
+    try {
+        console.log("Fetching All LSRW Content for File View...");
+
+        // Helper to retry failed fetches (network errors)
+        const fetchWithRetry = async (queryFn, retries = 3) => {
+            for (let i = 0; i < retries; i++) {
+                try {
+                    return await queryFn();
+                } catch (err) {
+                    const isLastAttempt = i === retries - 1;
+                    if (isLastAttempt) {
+                        console.error(`Query failed after ${retries} attempts:`, err.message);
+                        return { error: err, data: null };
+                    }
+                    const delay = 500 * Math.pow(2, i);
+                    await new Promise(resolve => setTimeout(resolve, delay));
+                }
+            }
+        };
+
+        // Fetch all data in parallel
+        const [
+            listeningRes,
+            speakingRes,
+            readingRes,
+            writingRes,
+            coursesRes
+        ] = await Promise.all([
+            // 1. Listening
+            fetchWithRetry(() => supabase
+                .from('lsrw_content')
+                .select('*')
+                .eq('module_type', 'listening')
+                .order('session_number', { ascending: true })
+                .order('created_at', { ascending: false })),
+
+            // 2. Speaking
+            fetchWithRetry(() => supabase
+                .from('speaking_materials')
+                .select('*')
+                .order('session_number', { ascending: true })
+                .order('created_at', { ascending: false })),
+
+            // 3. Reading
+            fetchWithRetry(() => supabase
+                .from('reading_materials')
+                .select('*')
+                .order('session_number', { ascending: true })
+                .order('created_at', { ascending: false })),
+
+            // 4. Writing
+            fetchWithRetry(() => supabase
+                .from('writing_tasks')
+                .select('*')
+                .order('session_number', { ascending: true })
+                .order('created_at', { ascending: false })),
+            
+            // 5. Courses
+            fetchWithRetry(() => supabase
+                .from('courses')
+                .select('id, course_name, language, level'))
+        ]);
+
+        const courses = coursesRes.data || [];
+        const listeningData = listeningRes.data || [];
+        const speakingData = speakingRes.data || [];
+        const readingData = readingRes.data || [];
+        const writingData = writingRes.data || [];
+
+        // Group content by Course ID
+        const courseMap = new Map();
+
+        // Initialize map with all courses
+        courses.forEach(course => {
+            courseMap.set(course.id, {
+                courseId: course.id,
+                courseName: course.course_name,
+                language: course.language,
+                level: course.level,
+                modules: {
+                    listening: [],
+                    speaking: [],
+                    reading: [],
+                    writing: []
+                }
+            });
+        });
+
+        // Helper to add items to course modules
+        const addToModule = (items, moduleName, formatter) => {
+            items.forEach(item => {
+                if (courseMap.has(item.course_id)) {
+                    const formattedItem = formatter ? formatter(item) : item;
+                    courseMap.get(item.course_id).modules[moduleName].push(formattedItem);
+                }
+            });
+        };
+
+        // 1. Process Listening
+        addToModule(listeningData, 'listening', (item) => {
+            const sessionNumber = item.session_number || 1;
+            const mediaType = item.media_type || 'audio';
+            const files = [];
+
+            // Audio
+            if (mediaType === 'audio' || mediaType === 'audio_url') {
+                const audioUrl = item.audio_url || item.external_media_url;
+                if (audioUrl) {
+                    files.push({
+                        ...item,
+                        module_type: 'listening',
+                        file_url: audioUrl,
+                        file_type: mediaType === 'audio_url' ? 'audio_url' : 'audio',
+                        file_name: mediaType === 'audio_url' ? 'External Audio URL' : 'Audio File',
+                        is_audio: true,
+                        is_external_url: mediaType === 'audio_url',
+                        session_number: sessionNumber
+                    });
+                }
+            } else if (mediaType === 'video' || mediaType === 'video_url') {
+                const videoUrl = item.video_file_path || item.external_media_url;
+                if (videoUrl) {
+                    files.push({
+                        ...item,
+                        module_type: 'listening',
+                        file_url: videoUrl,
+                        file_type: mediaType === 'video_url' ? 'video_url' : 'video',
+                        file_name: mediaType === 'video_url' ? 'External Video URL' : 'Video File',
+                        is_video: true,
+                        is_external_url: mediaType === 'video_url',
+                        session_number: sessionNumber
+                    });
+                }
+            } else if (item.audio_url) {
+                files.push({
+                    ...item,
+                    module_type: 'listening',
+                    file_url: item.audio_url,
+                    file_type: 'audio',
+                    file_name: 'Audio File',
+                    is_audio: true,
+                    session_number: sessionNumber
+                });
+            }
+
+            // Document
+            const questionDocUrl = item.question_doc_url || item.question_document_url || item.questionDoc || item.question_doc;
+            if (questionDocUrl) {
+                files.push({
+                    ...item,
+                    module_type: 'listening',
+                    file_url: questionDocUrl,
+                    file_type: 'document',
+                    file_name: 'Question Document',
+                    is_question_doc: true,
+                    session_number: sessionNumber
+                });
+            }
+
+            return {
+                sessionNumber,
+                lsrwId: item.lsrw_id || item.id,
+                title: item.title || `Session ${sessionNumber}`,
+                created_at: item.created_at,
+                files
+            };
+        });
+
+        // 2. Process Speaking
+        addToModule(speakingData, 'speaking', (item) => {
+            const sessionNumber = item.session_number || 1;
+            const files = [];
+
+            if (item.text_content || item.content_text || item.instruction) {
+                files.push({
+                    ...item,
+                    module_type: 'speaking',
+                    file_type: 'text',
+                    file_name: 'Text Content',
+                    is_text: true,
+                    session_number: sessionNumber
+                });
+            }
+            if (item.original_file_url) {
+                files.push({
+                    ...item,
+                    module_type: 'speaking',
+                    file_url: item.original_file_url,
+                    file_type: 'document',
+                    file_name: 'Text File',
+                    is_text_file: true,
+                    session_number: sessionNumber
+                });
+            }
+
+            return {
+                sessionNumber,
+                lsrwId: item.id,
+                id: item.id,
+                title: item.title || `Session ${sessionNumber}`,
+                created_at: item.created_at,
+                files
+            };
+        });
+
+        // 3. Process Reading
+        addToModule(readingData, 'reading', (item) => {
+            const sessionNumber = item.session_number || 999999;
+            const files = [];
+
+            if (item.file_url) {
+                files.push({
+                    ...item,
+                    module_type: 'reading',
+                    file_url: item.file_url,
+                    file_type: 'document',
+                    file_name: 'Reading Document',
+                    session_number: sessionNumber
+                });
+            }
+            if (item.content_text) {
+                files.push({
+                    ...item,
+                    module_type: 'reading',
+                    file_type: 'text',
+                    file_name: 'Text Content',
+                    content_text: item.content_text,
+                    session_number: sessionNumber
+                });
+            }
+
+            return {
+                sessionNumber,
+                title: item.title,
+                created_at: item.created_at,
+                id: item.id,
+                lsrwId: item.id,
+                files
+            };
+        });
+
+        // 4. Process Writing
+        addToModule(writingData, 'writing', (item) => {
+            const sessionNumber = item.session_number || 1;
+            const files = [];
+            const contentType = item.content_type || item.file_type || null;
+            const fileUrl = item.file_url || null;
+            
+            let imageUrl = null;
+            let docUrl = null;
+            
+            if (fileUrl && (contentType === 'image' || item.file_type === 'image')) {
+                imageUrl = fileUrl;
+            } else if (fileUrl && (contentType === 'document' || item.file_type === 'document')) {
+                docUrl = fileUrl;
+            } else if (fileUrl) {
+                if (contentType === 'image' || /\.(jpg|jpeg|png|gif|bmp|webp|svg)$/i.test(fileUrl)) {
+                    imageUrl = fileUrl;
+                } else if (contentType === 'document' || /\.(pdf|doc|docx)$/i.test(fileUrl)) {
+                    docUrl = fileUrl;
+                }
+            }
+            
+            if (!imageUrl && !docUrl) {
+                imageUrl = item.writing_image_url || item.image_url || null;
+                docUrl = item.writing_document_url || item.document_url || null;
+            }
+            
+            if (imageUrl) {
+                files.push({
+                    ...item,
+                    module_type: 'writing',
+                    file_url: imageUrl,
+                    file_type: 'image',
+                    is_image: true,
+                    title: item.title,
+                    session_number: sessionNumber
+                });
+            } else if (docUrl) {
+                files.push({
+                    ...item,
+                    module_type: 'writing',
+                    file_url: docUrl,
+                    file_type: 'document',
+                    is_document: true,
+                    title: item.title,
+                    session_number: sessionNumber
+                });
+            } else {
+                files.push({
+                    ...item,
+                    module_type: 'writing',
+                    file_url: null,
+                    file_type: 'text',
+                    title: item.title,
+                    session_number: sessionNumber
+                });
+            }
+
+            return {
+                sessionNumber,
+                title: item.title || `Writing Task ${sessionNumber}`,
+                lsrwId: item.id,
+                id: item.id,
+                files
+            };
+        });
+
+        // Convert map to array and filter out courses with no content
+        const result = Array.from(courseMap.values()).filter(course => 
+            course.modules.listening.length > 0 ||
+            course.modules.speaking.length > 0 ||
+            course.modules.reading.length > 0 ||
+            course.modules.writing.length > 0
+        );
+
+        res.json({
+            success: true,
+            data: result
+        });
+
+    } catch (error) {
+        console.error("Get All LSRW Content Error:", error);
+        res.status(500).json({ error: error.message || "Internal server error" });
+    }
+};
+

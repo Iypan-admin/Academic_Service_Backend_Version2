@@ -258,7 +258,7 @@ const approveStudent = async (req, res) => {
     // Fetch student details including state, center, and status
     const { data: student, error: fetchError } = await supabase
         .from("students")
-        .select(`state:states(state_name), center:centers(center_name), status, email, name`)
+        .select(`state:states(state_name), center:centers!students_center_fkey(center_name), status, email, name`)
         .eq("student_id", student_id)
         .single();
 

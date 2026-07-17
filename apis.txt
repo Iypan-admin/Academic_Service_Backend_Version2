@@ -1,0 +1,217 @@
+POST /api/batches
+Authorization: Bearer <jwt_token>
+Content-Type: application/json
+
+{
+  "batch_name": "AI & ML",
+  "language": "English",
+  "type": "Online",
+  "duration": "6 months",
+  "center": "123e4567-e89b-12d3-a456-426614174000",
+  "teacher": "987e6543-e21b-34d3-a789-426614174111"
+}
+
+
+GET /api/batches
+Authorization: Bearer <jwt_token>
+
+GET /api/batches/1
+Authorization: Bearer <jwt_token>
+
+PUT /api/batches/1
+Authorization: Bearer <jwt_token>
+Content-Type: application/json
+
+{
+  "batch_name": "Updated Name",
+  "language": "Hindi",
+  "type": "Offline",
+  "duration": "4 months",
+  "center": "new-center-id",
+  "teacher": "new-teacher-id"
+}
+
+DELETE /api/batches/1
+Authorization: Bearer <jwt_token>
+
+
+### API Endpoints for Notes (notesController.js)
+
+#### 1. Create a Note
+- **Method:** POST
+- **Endpoint:** /api/notes
+- **Role Required:** teacher
+- **Headers:**
+  ```json
+  {
+    "Authorization": "Bearer <JWT_TOKEN>",
+    "Content-Type": "application/json"
+  }
+  ```
+- **Request Body:**
+  ```json
+  {
+    "link": "https://drive.google.com/example",
+    "batch_id": "1234-uuid",
+    "title": "Mathematics - Introduction",
+    "note": "This is an introduction to algebra."
+  }
+  ```
+- **Response:**
+  ```json
+  {
+    "message": "Note created successfully",
+    "note": {
+      "notes_id": "auto-generated-id",
+      "created_at": "2024-02-16T12:00:00Z",
+      "link": "https://drive.google.com/example",
+      "batch_id": "1234-uuid",
+      "title": "Mathematics - Introduction",
+      "note": "This is an introduction to algebra."
+    }
+  }
+  ```
+
+#### 2. Get All Notes for a Specific Batch
+- **Method:** GET
+- **Endpoint:** /api/notes?batch_id=<batch_id>
+- **Role Required:** teacher
+- **Headers:**
+  ```json
+  {
+    "Authorization": "Bearer <JWT_TOKEN>"
+  }
+  ```
+- **Example Request:**
+  ```
+  GET /api/notes?batch_id=1234-uuid
+  ```
+- **Response:**
+  ```json
+  [
+    {
+      "notes_id": "note1-id",
+      "created_at": "2024-02-16T10:00:00Z",
+      "link": "https://drive.google.com/example1",
+      "batch_id": "1234-uuid",
+      "title": "Mathematics - Introduction",
+      "note": "Basic concepts of algebra."
+    },
+    {
+      "notes_id": "note2-id",
+      "created_at": "2024-02-16T11:00:00Z",
+      "link": "https://drive.google.com/example2",
+      "batch_id": "1234-uuid",
+      "title": "Advanced Algebra",
+      "note": "Explaining polynomials."
+    }
+  ]
+  ```
+
+#### 3. Get a Single Note by ID
+- **Method:** GET
+- **Endpoint:** /api/notes/:id
+- **Role Required:** teacher
+- **Headers:**
+  ```json
+  {
+    "Authorization": "Bearer <JWT_TOKEN>"
+  }
+  ```
+- **Example Request:**
+  ```
+  GET /api/notes/note1-id
+  ```
+- **Response:**
+  ```json
+  {
+    "notes_id": "note1-id",
+    "created_at": "2024-02-16T10:00:00Z",
+    "link": "https://drive.google.com/example1",
+    "batch_id": "1234-uuid",
+    "title": "Mathematics - Introduction",
+    "note": "Basic concepts of algebra."
+  }
+  ```
+
+#### 4. Update a Note
+- **Method:** PUT
+- **Endpoint:** /api/notes/:id
+- **Role Required:** teacher
+- **Headers:**
+  ```json
+  {
+    "Authorization": "Bearer <JWT_TOKEN>",
+    "Content-Type": "application/json"
+  }
+  ```
+- **Request Body:** (Only include fields to update)
+  ```json
+  {
+    "title": "Updated Title",
+    "note": "Updated remarks",
+    "link": "https://drive.google.com/updated-link"
+  }
+  ```
+- **Example Request:**
+  ```
+  PUT /api/notes/note1-id
+  ```
+- **Response:**
+  ```json
+  {
+    "message": "Note updated successfully",
+    "note": {
+      "notes_id": "note1-id",
+      "created_at": "2024-02-16T10:00:00Z",
+      "link": "https://drive.google.com/updated-link",
+      "batch_id": "1234-uuid",
+      "title": "Updated Title",
+      "note": "Updated remarks"
+    }
+  }
+  ```
+
+#### 5. Delete a Note
+- **Method:** DELETE
+- **Endpoint:** /api/notes/:id
+- **Role Required:** teacher
+- **Headers:**
+  ```json
+  {
+    "Authorization": "Bearer <JWT_TOKEN>"
+  }
+  ```
+- **Example Request:**
+  ```
+  DELETE /api/notes/note1-id
+  ```
+- **Response:**
+  ```json
+  {
+    "message": "Note deleted successfully"
+  }
+  ```
+
+### Summary
+| Action | Method | Endpoint | Required Role |
+|--------|--------|----------|--------------|
+| Create Note | POST | /api/notes | teacher |
+| Get Notes by Batch ID | GET | /api/notes?batch_id=<batch_id> | teacher |
+| Get Single Note | GET | /api/notes/:id | teacher |
+| Update Note | PUT | /api/notes/:id | teacher |
+| Delete Note | DELETE | /api/notes/:id | teacher |
+
+
+
+Gmeets APIs
+
+POST	/api/gmeets/	Create a new GMeet	{ "batch_id": "12345", "meet_link": "...", "date": "2024-02-20", "time": "10:30:00", "current": true, "note": "...", "title": "..." }
+
+GET	/api/gmeets/:batch_id	Get all GMeets for a batch	GET /api/gmeets/12345
+
+GET	/api/gmeets/meet/:meet_id	Get a specific GMeet by ID	GET /api/gmeets/meet/1
+
+PUT	/api/gmeets/:meet_id	Update a GMeet	{ "meet_link": "...", "current": false }
+
+DELETE	/api/gmeets/:meet_id	Delete a GMeet	DELETE /api/gmeets/1

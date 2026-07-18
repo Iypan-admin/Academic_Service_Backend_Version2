@@ -157,18 +157,52 @@ const getBatches = async (req, res) => {
 const getBatchById = async (req, res) => {
     const { id } = req.params;
 
-    const { data, error } = await supabase
-        .from("batches")
-        .select(`
-            *,
-            course:courses(id, course_name)
-        `)
-        .eq("batch_id", id)
-        .single();
+    try {
+        const { data, error } = await supabase
+            .from("batches")
+            .select(`
+                *,
+                center:centers(center_id, center_name),
+                teacher:teachers!batches_teacher_fkey(
+                    teacher_id,
+                    user:users(id, name)
+                ),
+                course:courses(id, course_name, type, level),
+                assistant:teachers!batches_assistant_tutor_fkey(
+                    teacher_id,
+                    user:users(id, name)
+                ),
+                enrollment:enrollment(batch)
+            `)
+            .eq("batch_id", id)
+            .single();
 
-    if (error) return res.status(400).json({ error: error.message });
+        if (error) return res.status(400).json({ error: error.message });
+        if (!data) return res.status(404).json({ error: "Batch not found" });
 
-    res.json(data);
+        const transformed = {
+            ...data,
+            center_name: data.center?.center_name,
+            teacher_name: data.teacher?.user?.name,
+            course_name: data.course?.course_name,
+            course_type: data.course?.type,
+            assistant_tutor_name: data.assistant?.user?.name,
+            student_count: data.enrollment ? data.enrollment.length : 0,
+            center: undefined,
+            teacher: undefined,
+            course: undefined,
+            assistant: undefined,
+            enrollment: undefined
+        };
+
+        res.json({
+            success: true,
+            data: transformed
+        });
+    } catch (error) {
+        console.error("Get batch by ID error:", error);
+        res.status(500).json({ error: "Internal server error" });
+    }
 };
 
 const updateBatch = async (req, res) => {

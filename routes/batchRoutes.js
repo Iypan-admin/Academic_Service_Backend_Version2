@@ -11,7 +11,11 @@ const {
     getBatchRequestsForAcademic,
     approveBatchRequest,
     rejectBatchRequest,
-    createBatchFromRequest
+    createBatchFromRequest,
+    getEligibleBatchesForMerge,
+    createMergeGroup,
+    getMergeGroups,
+    deleteMergeGroup
 } = require("../controllers/batchController.js");
 const authenticate = require("../config/authMiddleware.js");
 const jwt = require("jwt-simple");
@@ -37,6 +41,12 @@ const authMultiple = (allowedRoles) => {
         }
     };
 };
+
+// Batch Merge endpoints (Must be declared BEFORE /:id to prevent route shadowing)
+router.get("/merge/eligible", authenticate("academic"), getEligibleBatchesForMerge);
+router.post("/merge/create", authenticate("academic"), createMergeGroup);
+router.get("/merge/list", authenticate("academic"), getMergeGroups);
+router.delete("/merge/:merge_group_id", authenticate("academic"), deleteMergeGroup);
 
 // Batch Requests endpoints (Must be declared BEFORE /:id to prevent route shadowing)
 router.post("/requests/create", authenticate("center"), createBatchRequest);

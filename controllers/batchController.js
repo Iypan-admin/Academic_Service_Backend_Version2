@@ -633,6 +633,165 @@ const createBatchFromRequest = async (req, res) => {
     }
 };
 
+// ==================== BATCH MERGE CONTROLLER METHODS ====================
+
+const getEligibleBatchesForMerge = async (req, res) => {
+    try {
+        const { data: batches, error: batchErr } = await supabase
+            .from("batches")
+            .select(`
+                batch_id,
+                batch_name,
+                center:centers(center_name),
+                teacher:teachers(user:users(name)),
+                course:courses(course_name, level)
+            `)
+            .eq("status", "Started");
+
+        if (batchErr) return res.status(400).json({ error: batchErr.message });
+
+        const { data: mergedMembers, error: memberErr } = await supabase
+            .from("batch_merge_members")
+            .select("batch_id");
+
+        const mergedSet = new Set(mergedMembers ? mergedMembers.map(m => m.batch_id) : []);
+
+        const transformed = batches.map(b => ({
+            batch_id: b.batch_id,
+            batch_name: b.batch_name,
+            level: b.course?.level || "N/A",
+            course_name: b.course?.course_name || "N/A",
+            teacher_name: b.teacher?.user?.name || "N/A",
+            center_name: b.center?.center_name || "N/A",
+            is_merged: mergedSet.has(b.batch_id)
+        }));
+
+        res.json({ success: true, data: transformed });
+    } catch (error) {
+        console.error("Get eligible batches for merge error:", error);
+        res.status(500).json({ error: "Internal server error" });
+    }
+};
+
+const createMergeGroup = async (req, res) => {
+    const { merge_name, batch_ids, notes } = req.body;
+
+    if (!merge_name || !batch_ids || !Array.isArray(batch_ids) || batch_ids.length < 2) {
+        return res.status(400).json({ error: "Merge name and at least 2 batches are required" });
+    }
+
+    try {
+        // 1. Create the merge group
+        const { data: group, error: groupErr } = await supabase
+            .from("batch_merge_groups")
+            .insert([{
+                merge_name,
+                notes,
+                created_by: req.user.id,
+                status: "active"
+            }])
+            .select()
+            .single();
+
+        if (groupErr) return res.status(400).json({ error: groupErr.message });
+
+        // 2. Link the batches to the group
+        const membersToInsert = batch_ids.map(batch_id => ({
+            merge_group_id: group.merge_group_id,
+            batch_id,
+            added_by: req.user.id
+        }));
+
+        const { error: membersErr } = await supabase
+            .from("batch_merge_members")
+            .insert(membersToInsert);
+
+        if (membersErr) {
+            // Rollback group creation if member linking fails
+            await supabase.from("batch_merge_groups").delete().eq("merge_group_id", group.merge_group_id);
+            return res.status(400).json({ error: membersErr.message });
+        }
+
+        res.status(201).json({ success: true, data: group });
+    } catch (error) {
+        console.error("Create merge group error:", error);
+        res.status(500).json({ error: "Internal server error" });
+    }
+};
+
+const getMergeGroups = async (req, res) => {
+    const { status } = req.query;
+
+    try {
+        let query = supabase.from("batch_merge_info").select("*");
+        if (status) {
+            query = query.eq("status", status);
+        }
+
+        const { data, error } = await query;
+        if (error) return res.status(400).json({ error: error.message });
+
+        // Group rows by merge_group_id
+        const groups = {};
+        data.forEach(row => {
+            if (!groups[row.merge_group_id]) {
+                groups[row.merge_group_id] = {
+                    merge_group_id: row.merge_group_id,
+                    merge_name: row.merge_name,
+                    created_by: row.created_by,
+                    created_by_name: row.created_by_name,
+                    status: row.status,
+                    notes: row.notes,
+                    created_at: row.created_at,
+                    updated_at: row.updated_at,
+                    batches: []
+                };
+            }
+            if (row.batch_id) {
+                groups[row.merge_group_id].batches.push({
+                    batch_id: row.batch_id,
+                    batch_name: row.batch_name,
+                    added_at: row.added_at,
+                    added_by: row.added_by,
+                    added_by_name: row.added_by_name
+                });
+            }
+        });
+
+        res.json({ success: true, data: Object.values(groups) });
+    } catch (error) {
+        console.error("Get merge groups error:", error);
+        res.status(500).json({ error: "Internal server error" });
+    }
+};
+
+const deleteMergeGroup = async (req, res) => {
+    const { merge_group_id } = req.params;
+
+    try {
+        // 1. Delete members first (foreign key constraint)
+        const { error: membersErr } = await supabase
+            .from("batch_merge_members")
+            .delete()
+            .eq("merge_group_id", merge_group_id);
+
+        if (membersErr) return res.status(400).json({ error: membersErr.message });
+
+        // 2. Delete merge group
+        const { error: groupErr } = await supabase
+            .from("batch_merge_groups")
+            .delete()
+            .eq("merge_group_id", merge_group_id);
+
+        if (groupErr) return res.status(400).json({ error: groupErr.message });
+
+        res.json({ success: true, message: "Merge group deleted successfully" });
+    } catch (error) {
+        console.error("Delete merge group error:", error);
+        res.status(500).json({ error: "Internal server error" });
+    }
+};
+
 // ✅ Corrected Export
 module.exports = {
     createBatch,
@@ -646,5 +805,9 @@ module.exports = {
     getBatchRequestsForAcademic,
     approveBatchRequest,
     rejectBatchRequest,
-    createBatchFromRequest
+    createBatchFromRequest,
+    getEligibleBatchesForMerge,
+    createMergeGroup,
+    getMergeGroups,
+    deleteMergeGroup
 };

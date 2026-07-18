@@ -373,6 +373,278 @@ while (exists) {
     res.json({ message: "Student approved successfully and email sent", student: data });
 };
 
+// ==================== BATCH REQUEST CONTROLLER METHODS ====================
+
+const createBatchRequest = async (req, res) => {
+    const { duration, teacher_id, course_id, time_from, time_to, max_students, mode, justification } = req.body;
+
+    if (!duration || !teacher_id || !course_id || !time_from || !time_to || !max_students || !mode) {
+        return res.status(400).json({ error: "Missing required fields for batch request" });
+    }
+
+    try {
+        // Fetch user center and state
+        const { data: userProfile, error: profileErr } = await supabase
+            .from("users")
+            .select("center_id, state_id")
+            .eq("id", req.user.id)
+            .single();
+
+        if (profileErr || !userProfile) {
+            return res.status(400).json({ error: "Failed to fetch center/state profile for request" });
+        }
+
+        const { data, error } = await supabase
+            .from("batch_requests")
+            .insert([{
+                center_id: userProfile.center_id,
+                state_id: userProfile.state_id,
+                requested_by: req.user.id,
+                duration,
+                teacher_id,
+                course_id,
+                time_from,
+                time_to,
+                max_students,
+                mode,
+                justification,
+                status: "pending"
+            }])
+            .select()
+            .single();
+
+        if (error) return res.status(400).json({ error: error.message });
+
+        res.status(201).json({ message: "Batch request created successfully", data });
+    } catch (error) {
+        console.error("Create batch request error:", error);
+        res.status(500).json({ error: "Internal server error" });
+    }
+};
+
+const getBatchRequestsForState = async (req, res) => {
+    try {
+        const { data: adminProfile, error: profileErr } = await supabase
+            .from("users")
+            .select("state_id")
+            .eq("id", req.user.id)
+            .single();
+
+        if (profileErr || !adminProfile) {
+            return res.status(400).json({ error: "Failed to fetch state profile for state admin" });
+        }
+
+        const { data, error } = await supabase
+            .from("batch_requests_with_details")
+            .select("*")
+            .eq("state_id", adminProfile.state_id)
+            .order("created_at", { ascending: false });
+
+        if (error) return res.status(400).json({ error: error.message });
+
+        res.json({ success: true, data });
+    } catch (error) {
+        console.error("Get state batch requests error:", error);
+        res.status(500).json({ error: "Internal server error" });
+    }
+};
+
+const getBatchRequestsForAcademic = async (req, res) => {
+    try {
+        const { data, error } = await supabase
+            .from("batch_requests_with_details")
+            .select("*")
+            .order("created_at", { ascending: false });
+
+        if (error) return res.status(400).json({ error: error.message });
+
+        res.json({ success: true, data });
+    } catch (error) {
+        console.error("Get academic batch requests error:", error);
+        res.status(500).json({ error: "Internal server error" });
+    }
+};
+
+const approveBatchRequest = async (req, res) => {
+    const { requestId } = req.params;
+    const { notes } = req.body;
+
+    try {
+        const updates = {};
+        if (req.user.role === "state") {
+            updates.status = "state_approved";
+            updates.state_reviewed_by = req.user.id;
+            updates.state_reviewed_at = new Date();
+            updates.state_approval_notes = notes || "Approved by State Admin";
+        } else if (req.user.role === "academic") {
+            updates.status = "academic_approved";
+            updates.academic_reviewed_by = req.user.id;
+            updates.academic_reviewed_at = new Date();
+            updates.academic_approval_notes = notes || "Approved by Academic Admin";
+        } else {
+            return res.status(403).json({ error: "Access Denied. Role not authorized to approve requests." });
+        }
+
+        const { data, error } = await supabase
+            .from("batch_requests")
+            .update(updates)
+            .eq("request_id", requestId)
+            .select()
+            .single();
+
+        if (error) return res.status(400).json({ error: error.message });
+
+        res.json({ message: "Batch request approved successfully", data });
+    } catch (error) {
+        console.error("Approve batch request error:", error);
+        res.status(500).json({ error: "Internal server error" });
+    }
+};
+
+const rejectBatchRequest = async (req, res) => {
+    const { requestId } = req.params;
+    const { reason } = req.body;
+
+    if (!reason) {
+        return res.status(400).json({ error: "Rejection reason is required" });
+    }
+
+    try {
+        const { data, error } = await supabase
+            .from("batch_requests")
+            .update({
+                status: "rejected",
+                rejection_reason: reason,
+                rejected_by: req.user.id,
+                rejected_at: new Date()
+            })
+            .eq("request_id", requestId)
+            .select()
+            .single();
+
+        if (error) return res.status(400).json({ error: error.message });
+
+        res.json({ message: "Batch request rejected successfully", data });
+    } catch (error) {
+        console.error("Reject batch request error:", error);
+        res.status(500).json({ error: "Internal server error" });
+    }
+};
+
+const createBatchFromRequest = async (req, res) => {
+    const { requestId } = req.params;
+
+    try {
+        // 1. Fetch batch request details
+        const { data: request, error: reqErr } = await supabase
+            .from("batch_requests")
+            .select("*")
+            .eq("request_id", requestId)
+            .single();
+
+        if (reqErr || !request) {
+            return res.status(404).json({ error: "Batch request not found" });
+        }
+
+        if (request.status !== "state_approved" && request.status !== "pending") {
+            // Note: In some workflows it can be approved directly or after state approval
+        }
+
+        // 2. Fetch the latest batch number
+        const { data: lastBatch } = await supabase
+            .from("batches")
+            .select("batch_name")
+            .like("batch_name", "B%")
+            .order("batch_name", { ascending: false })
+            .limit(1)
+            .single();
+
+        let newBatchNumber = 118; // default start
+        if (lastBatch && lastBatch.batch_name) {
+            const match = lastBatch.batch_name.match(/^B(\d+)/);
+            if (match) {
+                newBatchNumber = parseInt(match[1]) + 1;
+            }
+        }
+
+        // 3. Get course name
+        const { data: courseExists, error: courseError } = await supabase
+            .from("courses")
+            .select("course_name, type")
+            .eq("id", request.course_id)
+            .single();
+
+        if (courseError || !courseExists) {
+            return res.status(400).json({ error: "Invalid course ID associated with request" });
+        }
+
+        // 4. Construct batch name
+        const formatToAmPm = (time) => {
+            const [hours, minutes] = time.split(':');
+            const d = new Date();
+            d.setHours(hours, minutes);
+            return d.toLocaleTimeString('en-US', {
+                hour: '2-digit',
+                minute: '2-digit',
+                hour12: true
+            }).replace(/\s/g, '');
+        };
+
+        const formattedFrom = formatToAmPm(request.time_from);
+        const formattedTo = formatToAmPm(request.time_to);
+        const batch_name = `B${newBatchNumber}-${courseExists.course_name.toUpperCase()}-${formattedFrom}-${formattedTo}`;
+
+        // 5. Insert batch
+        const { data: batchData, error: batchErr } = await supabase
+            .from("batches")
+            .insert([{
+                batch_name,
+                duration: request.duration,
+                center: request.center_id,
+                teacher: request.teacher_id,
+                course_id: request.course_id,
+                time_from: request.time_from,
+                time_to: request.time_to
+            }])
+            .select()
+            .single();
+
+        if (batchErr) return res.status(400).json({ error: batchErr.message });
+
+        // 6. Update batch request status and created_batch_id
+        await supabase
+            .from("batch_requests")
+            .update({
+                status: "academic_approved",
+                created_batch_id: batchData.batch_id,
+                academic_reviewed_by: req.user.id,
+                academic_reviewed_at: new Date(),
+                academic_approval_notes: "Batch created successfully from request"
+            })
+            .eq("request_id", requestId);
+
+        res.status(201).json({
+            message: "Batch created successfully from request",
+            data: batchData
+        });
+    } catch (error) {
+        console.error("Create batch from request error:", error);
+        res.status(500).json({ error: "Internal server error" });
+    }
+};
 
 // ✅ Corrected Export
-module.exports = { createBatch, getBatches, getBatchById, updateBatch, deleteBatch, approveStudent };
+module.exports = {
+    createBatch,
+    getBatches,
+    getBatchById,
+    updateBatch,
+    deleteBatch,
+    approveStudent,
+    createBatchRequest,
+    getBatchRequestsForState,
+    getBatchRequestsForAcademic,
+    approveBatchRequest,
+    rejectBatchRequest,
+    createBatchFromRequest
+};

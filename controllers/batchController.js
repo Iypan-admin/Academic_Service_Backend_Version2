@@ -112,7 +112,7 @@ const getBatches = async (req, res) => {
                 time_from,
                 time_to,
                 center:centers(center_id, center_name),
-                teacher:teachers(
+                teacher:teachers!batches_teacher_fkey(
                     teacher_id,
                     user:users(id, name)
                 ),

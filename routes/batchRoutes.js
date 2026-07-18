@@ -58,8 +58,8 @@ router.post("/requests/:requestId/create-batch", authenticate("academic"), creat
 
 // Standard Batch endpoints
 router.post("/", authenticate("academic"), createBatch);
-router.get("/", authenticate("academic"), getBatches);
-router.get("/:id", authenticate("academic"), getBatchById);
+router.get("/", authMultiple(["academic", "manager", "admin"]), getBatches);
+router.get("/:id", authMultiple(["academic", "manager", "admin"]), getBatchById);
 router.put("/:id", authenticate("academic"), updateBatch);
 router.delete("/:id", authenticate("academic"), deleteBatch);
 router.post("/approve", authenticate("academic"), approveStudent);

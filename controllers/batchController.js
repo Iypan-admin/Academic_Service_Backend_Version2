@@ -826,6 +826,103 @@ const deleteMergeGroup = async (req, res) => {
     }
 };
 
+const approveBatch = async (req, res) => {
+    const { id } = req.params;
+
+    try {
+        const { data, error } = await supabase
+            .from("batches")
+            .update({
+                status: "Approved",
+                approved_by: req.user.id,
+                approved_at: new Date().toISOString()
+            })
+            .eq("batch_id", id)
+            .select()
+            .single();
+
+        if (error) return res.status(400).json({ error: error.message });
+
+        res.json({ success: true, data });
+    } catch (error) {
+        console.error("Approve batch error:", error);
+        res.status(500).json({ error: "Internal server error" });
+    }
+};
+
+const rejectBatch = async (req, res) => {
+    const { id } = req.params;
+    const { rejection_reason } = req.body;
+
+    try {
+        const { data, error } = await supabase
+            .from("batches")
+            .update({
+                status: "Rejected",
+                rejection_reason
+            })
+            .eq("batch_id", id)
+            .select()
+            .single();
+
+        if (error) return res.status(400).json({ error: error.message });
+
+        res.json({ success: true, data });
+    } catch (error) {
+        console.error("Reject batch error:", error);
+        res.status(500).json({ error: "Internal server error" });
+    }
+};
+
+const startBatch = async (req, res) => {
+    const { id } = req.params;
+    const { start_date, total_sessions } = req.body;
+
+    try {
+        const { data, error } = await supabase
+            .from("batches")
+            .update({
+                status: "Started",
+                start_date: start_date || new Date().toISOString(),
+                total_sessions: parseInt(total_sessions) || null
+            })
+            .eq("batch_id", id)
+            .select()
+            .single();
+
+        if (error) return res.status(400).json({ error: error.message });
+
+        res.json({ success: true, data });
+    } catch (error) {
+        console.error("Start batch error:", error);
+        res.status(500).json({ error: "Internal server error" });
+    }
+};
+
+const completeBatch = async (req, res) => {
+    const { id } = req.params;
+    const { end_date } = req.body;
+
+    try {
+        const { data, error } = await supabase
+            .from("batches")
+            .update({
+                status: "Completed",
+                end_date: end_date || new Date().toISOString()
+            })
+            .eq("batch_id", id)
+            .select()
+            .single();
+
+        if (error) return res.status(400).json({ error: error.message });
+
+        res.json({ success: true, data });
+    } catch (error) {
+        console.error("Complete batch error:", error);
+        res.status(500).json({ error: "Internal server error" });
+    }
+};
+
 // ✅ Corrected Export
 module.exports = {
     createBatch,
@@ -843,5 +940,9 @@ module.exports = {
     getEligibleBatchesForMerge,
     createMergeGroup,
     getMergeGroups,
-    deleteMergeGroup
+    deleteMergeGroup,
+    approveBatch,
+    rejectBatch,
+    startBatch,
+    completeBatch
 };

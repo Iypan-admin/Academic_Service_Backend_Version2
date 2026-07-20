@@ -15,7 +15,11 @@ const {
     getEligibleBatchesForMerge,
     createMergeGroup,
     getMergeGroups,
-    deleteMergeGroup
+    deleteMergeGroup,
+    approveBatch,
+    rejectBatch,
+    startBatch,
+    completeBatch
 } = require("../controllers/batchController.js");
 const authenticate = require("../config/authMiddleware.js");
 const jwt = require("jwt-simple");
@@ -59,6 +63,10 @@ router.post("/requests/:requestId/create-batch", authenticate("academic"), creat
 // Standard Batch endpoints
 router.post("/", authenticate("academic"), createBatch);
 router.get("/", authMultiple(["academic", "manager", "admin"]), getBatches);
+router.put("/:id/approve", authMultiple(["admin", "manager"]), approveBatch);
+router.put("/:id/reject", authMultiple(["admin", "manager"]), rejectBatch);
+router.post("/:id/start", authMultiple(["admin", "manager", "academic"]), startBatch);
+router.post("/:id/complete", authMultiple(["admin", "manager", "academic"]), completeBatch);
 router.get("/:id", authMultiple(["academic", "manager", "admin"]), getBatchById);
 router.put("/:id", authenticate("academic"), updateBatch);
 router.delete("/:id", authenticate("academic"), deleteBatch);

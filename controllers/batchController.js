@@ -108,6 +108,7 @@ const getBatches = async (req, res) => {
                 batch_id,
                 batch_name,
                 duration,
+                status,
                 created_at,
                 time_from,
                 time_to,

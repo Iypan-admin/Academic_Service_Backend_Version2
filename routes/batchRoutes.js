@@ -19,7 +19,8 @@ const {
     approveBatch,
     rejectBatch,
     startBatch,
-    completeBatch
+    completeBatch,
+    updateStudentBatch
 } = require("../controllers/batchController.js");
 const authenticate = require("../config/authMiddleware.js");
 const jwt = require("jwt-simple");
@@ -63,6 +64,7 @@ router.post("/requests/:requestId/create-batch", authenticate("academic"), creat
 // Standard Batch endpoints
 router.post("/", authenticate("academic"), createBatch);
 router.get("/", authMultiple(["academic", "manager", "admin"]), getBatches);
+router.put("/update-student-batch", authMultiple(["academic", "manager", "admin"]), updateStudentBatch);
 router.put("/:id/approve", authMultiple(["admin", "manager"]), approveBatch);
 router.put("/:id/reject", authMultiple(["admin", "manager"]), rejectBatch);
 router.post("/:id/start", authMultiple(["admin", "manager", "academic"]), startBatch);

@@ -924,6 +924,71 @@ const completeBatch = async (req, res) => {
     }
 };
 
+const updateStudentBatch = async (req, res) => {
+    const { student_id, batch_id } = req.body;
+
+    if (!student_id || !batch_id) {
+        return res.status(400).json({ error: "Student ID and Batch ID are required" });
+    }
+
+    try {
+        // 1. Verify new batch exists
+        const { data: batch, error: batchErr } = await supabase
+            .from("batches")
+            .select("batch_id")
+            .eq("batch_id", batch_id)
+            .single();
+
+        if (batchErr || !batch) {
+            return res.status(404).json({ error: "Batch not found" });
+        }
+
+        // 2. Find student's enrollment records
+        const { data: enrollments, error: enrollErr } = await supabase
+            .from("enrollment")
+            .select("*")
+            .eq("student", student_id);
+
+        if (enrollErr || !enrollments || enrollments.length === 0) {
+            // No enrollment exists, create a new enrollment record
+            const { data: newEnroll, error: createErr } = await supabase
+                .from("enrollment")
+                .insert([{
+                    student: student_id,
+                    batch: batch_id,
+                    status: true,
+                    is_permanent: false
+                }])
+                .select()
+                .single();
+
+            if (createErr) return res.status(400).json({ error: createErr.message });
+            return res.json({ success: true, message: "Student enrolled in batch successfully", data: newEnroll });
+        }
+
+        // Determine which enrollment to update
+        // Prefer the active enrollment (status = true), otherwise update the most recent one
+        const activeEnroll = enrollments.find(e => e.status === true) || enrollments[enrollments.length - 1];
+
+        const { data: updatedEnroll, error: updateErr } = await supabase
+            .from("enrollment")
+            .update({
+                batch: batch_id,
+                status: true // Make sure status is active upon batch update/change
+            })
+            .eq("enrollment_id", activeEnroll.enrollment_id)
+            .select()
+            .single();
+
+        if (updateErr) return res.status(400).json({ error: updateErr.message });
+
+        res.json({ success: true, message: "Student batch updated successfully", data: updatedEnroll });
+    } catch (error) {
+        console.error("Update student batch error:", error);
+        res.status(500).json({ error: "Internal server error" });
+    }
+};
+
 // ✅ Corrected Export
 module.exports = {
     createBatch,
@@ -945,5 +1010,6 @@ module.exports = {
     approveBatch,
     rejectBatch,
     startBatch,
-    completeBatch
+    completeBatch,
+    updateStudentBatch
 };

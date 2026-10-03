@@ -115,7 +115,7 @@ const getBatches = async (req, res) => {
                 center:centers(center_id, center_name),
                 teacher:teachers!batches_teacher_fkey(
                     teacher_id,
-                    user:users(id, name)
+                    user:users(id, name, full_name)
                 ),
                 course:courses(id, course_name, type),
                 enrollment:enrollment(batch)   -- join enrollment to count students
@@ -127,19 +127,27 @@ const getBatches = async (req, res) => {
         }
 
         // 🔄 Transform + add student_count
-        const transformedData = data.map(batch => ({
-            ...batch,
-            center_name: batch.center?.center_name,
-            teacher_name: batch.teacher?.user?.name,
-            course_name: batch.course?.course_name,
-            course_type: batch.course?.type,
-            student_count: batch.enrollment ? batch.enrollment.length : 0, // 👈 count here
-            // cleanup nested
-            center: undefined,
-            teacher: undefined,
-            course: undefined,
-            enrollment: undefined
-        }));
+        const transformedData = data.map(batch => {
+            const rawFullName = batch.teacher?.user?.full_name?.trim();
+            const rawCodeName = batch.teacher?.user?.name?.trim();
+            const cleanName = rawFullName || rawCodeName || 'Teacher';
+
+            return {
+                ...batch,
+                center_id: batch.center?.center_id,
+                center_name: batch.center?.center_name,
+                teacher_id: batch.teacher?.teacher_id || batch.teacher?.user?.id,
+                teacher_name: cleanName,
+                teacher_full_name: rawFullName || cleanName,
+                course_id: batch.course?.id,
+                course_name: batch.course?.course_name,
+                course_type: batch.course?.type,
+                student_count: batch.enrollment ? batch.enrollment.length : 0, // 👈 count here
+                // keep raw teacher identifier if present
+                teacher: batch.teacher?.teacher_id || batch.teacher?.user?.id,
+                course: batch.course?.id
+            };
+        });
 
         res.json({
             success: true,

@@ -7,6 +7,8 @@ const notesRoutes = require("./routes/notesRoutes.js");
 const gmeetRoutes = require("./routes/gmeetRoutes.js");
 const courseRoutes = require("./routes/courseRoutes.js");  
 const eventRoutes = require("./routes/eventRoutes.js");
+const liveClassRoutes = require("./routes/liveClassRoutes.js");
+const recordingRoutes = require("./routes/recordingRoutes.js");
 
 dotenv.config();
 
@@ -19,8 +21,11 @@ app.use("/api/notes", notesRoutes);
 app.use("/api/gmeets", gmeetRoutes);
 app.use("/api/courses", courseRoutes);  
 app.use("/api/events", eventRoutes);
+app.use("/api/live-classes", liveClassRoutes);
+app.use("/api/recordings", recordingRoutes);
 
 const PORT = process.env.PORT || 3005;
 app.listen(PORT, () => {
     console.log(`Server running on port ${PORT}`);
 });
+

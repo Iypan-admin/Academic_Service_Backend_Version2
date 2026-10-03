@@ -59,7 +59,7 @@ async function createRoom(roomName) {
 /**
  * Generates a join JWT token for tutor or student
  */
-async function generateToken({ roomName, identity, name, isTeacher = false }) {
+async function generateToken({ roomName, identity, name, isTeacher = false, metadata = null }) {
     if (!LIVEKIT_API_KEY || !LIVEKIT_API_SECRET) {
         throw new Error('LiveKit API key or secret missing');
     }
@@ -67,6 +67,7 @@ async function generateToken({ roomName, identity, name, isTeacher = false }) {
     const at = new AccessToken(LIVEKIT_API_KEY, LIVEKIT_API_SECRET, {
         identity: identity || `user_${Date.now()}`,
         name: name || (isTeacher ? 'Tutor' : 'Student'),
+        metadata: metadata ? (typeof metadata === 'string' ? metadata : JSON.stringify(metadata)) : undefined,
         ttl: '4h',
     });
 

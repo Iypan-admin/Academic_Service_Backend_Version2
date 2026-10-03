@@ -380,9 +380,16 @@ async function startLiveClass(req, res) {
 
         const token = await livekitService.generateToken({
             roomName,
-            identity: req.user?.id || (isAcademic ? `academic_${Date.now()}` : `tutor_${liveClass.teacher_id}`),
+            identity: req.user?.id ? (isAcademic ? `academic_${req.user.id}` : `tutor_${req.user.id}`) : (isAcademic ? `academic_${Date.now()}` : `tutor_${liveClass.teacher_id}`),
             name: tokenName,
-            isTeacher: true
+            isTeacher: true,
+            metadata: JSON.stringify({
+                role: req.user?.role || (isAcademic ? 'academic' : 'teacher'),
+                roleLabel: isAcademic ? 'Academic Manager' : (isAdmin ? 'Administrator' : 'Instructor (Host)'),
+                isAcademic,
+                isAdmin,
+                isTeacher: true
+            })
         });
 
         res.json({
@@ -457,10 +464,11 @@ async function joinLiveClass(req, res) {
             }
         }
 
+        const roleLabel = isAcademic ? 'Academic Manager' : (isAdmin ? 'Administrator' : (isHost ? 'Instructor (Host)' : 'Student'));
         const identity = isInspector
             ? `academic_${req.user?.id || Date.now()}`
-            : (req.user?.student_id || req.user?.id || `user_${Date.now()}`);
-        const defaultRoleName = isInspector ? 'Academic Manager' : (isHost ? 'Tutor' : 'Student');
+            : (isHost ? `tutor_${req.user?.id || liveClass.teacher_id}` : (req.user?.student_id || req.user?.id || `user_${Date.now()}`));
+        const defaultRoleName = roleLabel;
         let displayName = req.user?.full_name || req.user?.name;
 
         // If student name is missing or default, resolve from students table
@@ -485,7 +493,14 @@ async function joinLiveClass(req, res) {
             roomName: liveClass.room_name,
             identity,
             name: displayName,
-            isTeacher: isHost
+            isTeacher: isHost,
+            metadata: JSON.stringify({
+                role: req.user?.role || (isAcademic ? 'academic' : (isAdmin ? 'admin' : (isHost ? 'teacher' : 'student'))),
+                roleLabel,
+                isAcademic,
+                isAdmin,
+                isTeacher: isHost
+            })
         });
 
         res.json({
@@ -892,7 +907,14 @@ async function getJoinStatus(req, res) {
                     roomName: liveClass.room_name,
                     identity: studentId,
                     name: resolvedName || 'Student',
-                    isTeacher: false
+                    isTeacher: false,
+                    metadata: JSON.stringify({
+                        role: 'student',
+                        roleLabel: 'Student',
+                        isAcademic: false,
+                        isAdmin: false,
+                        isTeacher: false
+                    })
                 });
 
                 return res.json({

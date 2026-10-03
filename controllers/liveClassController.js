@@ -135,6 +135,17 @@ async function scheduleLiveClass(req, res) {
             return res.status(409).json({ error: conflict.message, conflict });
         }
 
+        // Normalize scheduled_end if it's less than or equal to scheduled_start (e.g. 12:00 AM typo instead of 12:00 PM)
+        let normalizedEnd = scheduled_end;
+        if (new Date(normalizedEnd).getTime() <= new Date(scheduled_start).getTime()) {
+            const plus12h = new Date(new Date(normalizedEnd).getTime() + 12 * 60 * 60 * 1000);
+            if (plus12h.getTime() > new Date(scheduled_start).getTime()) {
+                normalizedEnd = plus12h.toISOString();
+            } else {
+                normalizedEnd = new Date(new Date(scheduled_start).getTime() + 60 * 60 * 1000).toISOString();
+            }
+        }
+
         // Room name convention: isml_batch_<batchId>_<timestamp>
         const room_name = `isml_batch_${batch_id.replace(/-/g, '').slice(0, 10)}_${Date.now()}`;
 
@@ -149,7 +160,7 @@ async function scheduleLiveClass(req, res) {
                 session_number: session_number || 1,
                 room_name,
                 scheduled_start,
-                scheduled_end,
+                scheduled_end: normalizedEnd,
                 status: 'SCHEDULED',
                 recording_enabled: Boolean(recording_enabled),
                 created_by: req.user?.id || null
@@ -187,14 +198,15 @@ async function getLiveClasses(req, res) {
     try {
         const { batch_id, teacher_id, status, date } = req.query;
 
-        // Auto-complete any active classes whose scheduled_end has passed
-        const nowIso = new Date().toISOString();
+        // Auto-complete only stale SCHEDULED classes that ended more than 4 hours ago
+        // (NEVER auto-complete LIVE classes while sessions are in progress)
+        const fourHoursAgoIso = new Date(Date.now() - 4 * 60 * 60 * 1000).toISOString();
         try {
             await supabase
                 .from('live_classes')
-                .update({ status: 'COMPLETED', updated_at: nowIso })
-                .in('status', ['LIVE', 'SCHEDULED'])
-                .lt('scheduled_end', nowIso);
+                .update({ status: 'COMPLETED', updated_at: new Date().toISOString() })
+                .eq('status', 'SCHEDULED')
+                .lt('scheduled_end', fourHoursAgoIso);
         } catch (autoErr) {
             console.warn('Auto-complete expired sessions note:', autoErr.message);
         }

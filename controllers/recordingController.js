@@ -49,6 +49,11 @@ async function getBatchRecordings(req, res) {
         // Deduplicate: Each live class session should have exactly 1 canonical card
         const uniqueMap = new Map();
         for (const r of (data || [])) {
+            // For students, skip in-progress recordings that do not have an uploaded/ready video file
+            if (req.user?.role === 'student' && (!r.storage_object_path && !r.raw_egress_url)) {
+                continue;
+            }
+
             const classKey = r.live_class_id || r.id;
             if (!uniqueMap.has(classKey)) {
                 uniqueMap.set(classKey, r);

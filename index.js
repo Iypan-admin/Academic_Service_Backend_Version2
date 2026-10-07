@@ -9,6 +9,7 @@ const courseRoutes = require("./routes/courseRoutes.js");
 const eventRoutes = require("./routes/eventRoutes.js");
 const liveClassRoutes = require("./routes/liveClassRoutes.js");
 const recordingRoutes = require("./routes/recordingRoutes.js");
+const attendanceRoutes = require("./routes/attendanceRoutes.js");
 
 dotenv.config();
 
@@ -30,6 +31,7 @@ app.use("/api/courses", courseRoutes);
 app.use("/api/events", eventRoutes);
 app.use("/api/live-classes", liveClassRoutes);
 app.use("/api/recordings", recordingRoutes);
+app.use("/api/attendance", attendanceRoutes);
 
 const PORT = process.env.PORT || 3005;
 app.listen(PORT, () => {

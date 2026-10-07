@@ -69,7 +69,7 @@ router.put("/:id/approve", authMultiple(["admin", "manager"]), approveBatch);
 router.put("/:id/reject", authMultiple(["admin", "manager"]), rejectBatch);
 router.post("/:id/start", authMultiple(["admin", "manager", "academic"]), startBatch);
 router.post("/:id/complete", authMultiple(["admin", "manager", "academic"]), completeBatch);
-router.get("/:id", authMultiple(["academic", "manager", "admin"]), getBatchById);
+router.get("/:id", authMultiple(["academic", "manager", "admin", "teacher"]), getBatchById);
 router.put("/:id", authenticate("academic"), updateBatch);
 router.delete("/:id", authenticate("academic"), deleteBatch);
 router.post("/approve", authenticate("academic"), approveStudent);

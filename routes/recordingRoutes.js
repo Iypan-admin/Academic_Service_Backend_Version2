@@ -23,6 +23,7 @@ router.get('/batch/:batch_id', authorizeRoles(['admin', 'academic', 'teacher', '
 
 // 3. Academic Manager / Admin / Teacher: Get recordings
 router.get('/all', authorizeRoles(['admin', 'academic', 'teacher']), getAllRecordings);
+router.get('/', authorizeRoles(['admin', 'academic', 'teacher']), getAllRecordings);
 
 // 4. Playback stream URL: Secure 2-hour signed URL for video player
 router.get('/:id/stream', authorizeRoles(['admin', 'academic', 'teacher', 'student']), getRecordingStreamUrl);

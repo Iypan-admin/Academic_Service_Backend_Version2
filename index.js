@@ -16,6 +16,13 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
+app.use((req, res, next) => {
+    if (req.url.includes('/join-') || req.url.includes('/request-join') || req.url.includes('/admit') || req.url.includes('/live-classes')) {
+        console.log(`[ACADEMIC_REQ] ${new Date().toISOString()} ${req.method} ${req.url}`);
+    }
+    next();
+});
+
 app.use("/api/batches", batchRoutes);
 app.use("/api/notes", notesRoutes);
 app.use("/api/gmeets", gmeetRoutes);

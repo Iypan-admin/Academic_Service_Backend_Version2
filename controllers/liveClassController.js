@@ -229,8 +229,9 @@ async function getLiveClasses(req, res) {
         }
         if (status) query = query.eq('status', status);
         if (date) {
-            const startOfDay = `${date}T00:00:00Z`;
-            const endOfDay = `${date}T23:59:59Z`;
+            // Anchor date strictly to Asia/Kolkata (+05:30) full 24-hour day range
+            const startOfDay = new Date(`${date}T00:00:00+05:30`).toISOString();
+            const endOfDay = new Date(`${date}T23:59:59.999+05:30`).toISOString();
             query = query.gte('scheduled_start', startOfDay).lte('scheduled_start', endOfDay);
         }
 
@@ -321,20 +322,16 @@ async function startLiveClass(req, res) {
         // Ensure room exists in LiveKit
         await livekitService.createRoom(roomName);
 
-        const isAlreadyLive = liveClass.status === 'LIVE';
-        // When tutor starts, or if restart is requested, or if previous actual_start was over 2 hours ago, start fresh from now
-        const restartRequested = req.query.restart === 'true' || req.body?.restart === true;
-        const isStaleStart = liveClass.actual_start && (nowMs - new Date(liveClass.actual_start).getTime() > 2 * 60 * 60 * 1000);
-        const actualStart = (!isAlreadyLive || restartRequested || isStaleStart || !liveClass.actual_start)
-            ? new Date().toISOString()
-            : liveClass.actual_start;
+        // Every time a tutor starts or rejoins the live class, timer starts fresh from 0
+        const nowIso = new Date().toISOString();
+        const actualStart = nowIso;
 
         await supabase
             .from('live_classes')
             .update({
                 status: 'LIVE',
                 actual_start: actualStart,
-                updated_at: new Date().toISOString()
+                updated_at: nowIso
             })
             .eq('id', id);
 
@@ -353,34 +350,39 @@ async function startLiveClass(req, res) {
                 console.warn('Recording start notice:', recErr.message);
             }
 
-            // Check if recording row already exists for this class to prevent duplicates
-            const { data: existingRec } = await supabase
-                .from('live_class_recordings')
-                .select('id')
-                .eq('live_class_id', liveClass.id)
-                .order('created_at', { ascending: false })
-                .limit(1)
-                .maybeSingle();
+            // ONLY create or update a DB recording row if LiveKit server egress is actually active
+            // (Client-side recording in studio will save directly upon class completion via uploadClassRecording)
+            if (egressId) {
+                const { data: existingRec } = await supabase
+                    .from('live_class_recordings')
+                    .select('id, status, storage_object_path')
+                    .eq('live_class_id', liveClass.id)
+                    .is('storage_object_path', null)
+                    .order('created_at', { ascending: false })
+                    .limit(1)
+                    .maybeSingle();
 
-            if (existingRec) {
-                await supabase
-                    .from('live_class_recordings')
-                    .update({
-                        egress_id: egressId,
-                        status: 'RECORDING',
-                        updated_at: new Date().toISOString()
-                    })
-                    .eq('id', existingRec.id);
-            } else {
-                await supabase
-                    .from('live_class_recordings')
-                    .insert([{
-                        live_class_id: liveClass.id,
-                        batch_id: liveClass.batch_id,
-                        egress_id: egressId,
-                        storage_object_path: recRes?.filepath || null,
-                        status: 'RECORDING'
-                    }]);
+                if (existingRec) {
+                    await supabase
+                        .from('live_class_recordings')
+                        .update({
+                            egress_id: egressId,
+                            status: 'RECORDING',
+                            updated_at: new Date().toISOString()
+                        })
+                        .eq('id', existingRec.id);
+                } else {
+                    await supabase
+                        .from('live_class_recordings')
+                        .insert([{
+                            live_class_id: liveClass.id,
+                            batch_id: liveClass.batch_id,
+                            egress_id: egressId,
+                            storage_object_path: recRes?.filepath || null,
+                            status: 'RECORDING',
+                            created_at: new Date().toISOString()
+                        }]);
+                }
             }
         }
 
@@ -411,7 +413,14 @@ async function startLiveClass(req, res) {
             wsUrl: livekitService.LIVEKIT_URL,
             token,
             egressId,
-            recordingActive: Boolean(liveClass.recording_enabled)
+            recordingActive: Boolean(liveClass.recording_enabled),
+            actualStart,
+            actual_start: actualStart,
+            liveClass: {
+                ...liveClass,
+                status: 'LIVE',
+                actual_start: actualStart
+            }
         });
     } catch (err) {
         console.error('Error starting live class:', err);
@@ -447,15 +456,17 @@ async function joinLiveClass(req, res) {
             return res.status(400).json({ error: 'This class has been cancelled' });
         }
 
-        // Check if session has exceeded its scheduled_end time (with 60-min grace period)
-        const nowMs = Date.now();
-        const endMs = new Date(liveClass.scheduled_end).getTime();
-        if (nowMs > endMs + 60 * 60 * 1000) {
-            const istEndTime = formatIST(liveClass.scheduled_end);
-            return res.status(403).json({
-                error: `This live class session concluded at ${istEndTime} IST. Classroom entry is closed.`,
-                code: 'SCHEDULE_EXPIRED'
-            });
+        // Check if session has exceeded its scheduled_end time (only if not actively LIVE)
+        if (liveClass.status !== 'LIVE') {
+            const nowMs = Date.now();
+            const endMs = new Date(liveClass.scheduled_end).getTime();
+            if (nowMs > endMs + 60 * 60 * 1000) {
+                const istEndTime = formatIST(liveClass.scheduled_end);
+                return res.status(403).json({
+                    error: `This live class session concluded at ${istEndTime} IST. Classroom entry is closed.`,
+                    code: 'SCHEDULE_EXPIRED'
+                });
+            }
         }
 
         const isAcademic = req.user?.role === 'academic';
@@ -597,22 +608,27 @@ async function endLiveClass(req, res) {
                     if (egId) await livekitService.stopRecording(egId).catch(() => {});
                 }
 
-                const bestRec = allRecs.find(r => r.storage_object_path) || allRecs[0];
+                // Clean up any empty recording stubs that have no video file and no active egress
+                await supabase
+                    .from('live_class_recordings')
+                    .delete()
+                    .eq('live_class_id', id)
+                    .is('storage_object_path', null)
+                    .is('raw_egress_url', null)
+                    .is('egress_id', null)
+                    .catch(() => {});
+
+                // Only finalize in-progress RECORDING status rows that actually have an egress job
                 await supabase
                     .from('live_class_recordings')
                     .update({
                         status: 'READY',
                         updated_at: new Date().toISOString()
                     })
-                    .eq('id', bestRec.id);
-
-                const duplicateIds = allRecs.filter(r => r.id !== bestRec.id).map(r => r.id);
-                if (duplicateIds.length > 0) {
-                    await supabase
-                        .from('live_class_recordings')
-                        .delete()
-                        .in('id', duplicateIds);
-                }
+                    .eq('live_class_id', id)
+                    .eq('status', 'RECORDING')
+                    .not('egress_id', 'is', null)
+                    .catch(() => {});
             }
         } catch (recErr) {
             console.warn('Recording finalize note:', recErr.message);
@@ -811,14 +827,24 @@ async function requestJoinClass(req, res) {
             .single();
 
         if (targetClass) {
-            const nowMs = Date.now();
-            const endMs = new Date(targetClass.scheduled_end).getTime();
-            if (nowMs > endMs || targetClass.status === 'COMPLETED') {
-                const istEndTime = formatIST(targetClass.scheduled_end);
+            if (targetClass.status === 'COMPLETED' || targetClass.status === 'CANCELLED') {
                 return res.status(403).json({
-                    error: `This live class schedule ended at ${istEndTime} IST. Classroom entry is closed.`,
-                    code: 'SCHEDULE_EXPIRED'
+                    error: `This live class session has ended.`,
+                    code: 'CLASS_COMPLETED'
                 });
+            }
+
+            // Only enforce schedule expiry if class is NOT actively LIVE
+            if (targetClass.status !== 'LIVE' && targetClass.scheduled_end) {
+                const nowMs = Date.now();
+                const endMs = new Date(targetClass.scheduled_end).getTime();
+                if (nowMs > endMs + 60 * 60 * 1000) {
+                    const istEndTime = formatIST(targetClass.scheduled_end);
+                    return res.status(403).json({
+                        error: `This live class schedule ended at ${istEndTime} IST. Classroom entry is closed.`,
+                        code: 'SCHEDULE_EXPIRED'
+                    });
+                }
             }
         }
 
@@ -830,7 +856,7 @@ async function requestJoinClass(req, res) {
             return res.json({ status: 'APPROVED', direct: true });
         }
 
-        const studentId = req.user?.student_id || req.user?.id;
+        const studentId = req.user?.student_id || req.user?.id || req.user?.userId || req.body?.student_id || req.body?.studentId || 'std_' + Date.now();
         let studentName = req.body?.student_name || req.body?.name || req.user?.name || req.user?.full_name;
         let regNo = req.body?.registration_number || req.body?.reg_no || req.user?.registration_number;
 
@@ -883,7 +909,7 @@ async function getJoinStatus(req, res) {
             return res.json({ status: 'APPROVED' });
         }
 
-        const studentId = req.user?.student_id || req.user?.id;
+        const studentId = req.user?.student_id || req.user?.id || req.user?.userId || req.query?.student_id;
         const admission = admissionsManager.getStatus(id, studentId);
 
         if (!admission) {
@@ -959,7 +985,7 @@ async function getJoinRequests(req, res) {
 }
 
 /**
- * 12. Admit a Student (Tutor only)
+ * 12. Admit a Student (Tutor / Host)
  */
 async function admitStudent(req, res) {
     try {
@@ -976,9 +1002,13 @@ async function admitStudent(req, res) {
             .eq('id', id)
             .single();
 
-        const isTutor = req.user?.role === 'teacher' || req.user?.id === liveClass?.teacher_id;
-        if (!isTutor) {
-            return res.status(403).json({ error: 'Only the assigned tutor can approve students to join.' });
+        const isAuthorized = req.user?.role === 'teacher' || 
+                             req.user?.role === 'academic' || 
+                             req.user?.role === 'admin' || 
+                             req.user?.id === liveClass?.teacher_id ||
+                             !liveClass?.teacher_id;
+        if (!isAuthorized) {
+            return res.status(403).json({ error: 'Only the assigned tutor or academic host can approve students to join.' });
         }
 
         const admission = admissionsManager.admitStudent(id, student_id);
@@ -989,7 +1019,7 @@ async function admitStudent(req, res) {
 }
 
 /**
- * 13. Admit All Pending Students (Tutor only)
+ * 13. Admit All Pending Students (Tutor / Host)
  */
 async function admitAllStudents(req, res) {
     try {
@@ -1001,9 +1031,13 @@ async function admitAllStudents(req, res) {
             .eq('id', id)
             .single();
 
-        const isTutor = req.user?.role === 'teacher' || req.user?.id === liveClass?.teacher_id;
-        if (!isTutor) {
-            return res.status(403).json({ error: 'Only the assigned tutor can approve students to join.' });
+        const isAuthorized = req.user?.role === 'teacher' || 
+                             req.user?.role === 'academic' || 
+                             req.user?.role === 'admin' || 
+                             req.user?.id === liveClass?.teacher_id ||
+                             !liveClass?.teacher_id;
+        if (!isAuthorized) {
+            return res.status(403).json({ error: 'Only the assigned tutor or academic host can approve students to join.' });
         }
 
         const count = admissionsManager.admitAll(id);
@@ -1014,7 +1048,7 @@ async function admitAllStudents(req, res) {
 }
 
 /**
- * 14. Reject a Student (Tutor only)
+ * 14. Reject a Student (Tutor / Host)
  */
 async function rejectStudent(req, res) {
     try {
@@ -1031,9 +1065,13 @@ async function rejectStudent(req, res) {
             .eq('id', id)
             .single();
 
-        const isTutor = req.user?.role === 'teacher' || req.user?.id === liveClass?.teacher_id;
-        if (!isTutor) {
-            return res.status(403).json({ error: 'Only the assigned tutor can reject students.' });
+        const isAuthorized = req.user?.role === 'teacher' || 
+                             req.user?.role === 'academic' || 
+                             req.user?.role === 'admin' || 
+                             req.user?.id === liveClass?.teacher_id ||
+                             !liveClass?.teacher_id;
+        if (!isAuthorized) {
+            return res.status(403).json({ error: 'Only the assigned tutor or academic host can reject students.' });
         }
 
         const admission = admissionsManager.rejectStudent(id, student_id);

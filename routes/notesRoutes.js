@@ -1,5 +1,5 @@
 const express = require("express");
-const authenticate = require("../config/authMiddleware.js");
+const authorizeRoles = require("../config/multiRoleAuth.js");
 const {
     createNote,
     getNotes,
@@ -10,10 +10,10 @@ const {
 
 const router = express.Router();
 
-router.post("/", authenticate("teacher"), createNote);
-router.get("/", authenticate("teacher"), getNotes);
-router.get("/:id", authenticate("teacher"), getNoteById);
-router.put("/:id", authenticate("teacher"), updateNote);
-router.delete("/:id", authenticate("teacher"), deleteNote);
+router.post("/", authorizeRoles(["teacher", "academic", "admin", "manager"]), createNote);
+router.get("/", authorizeRoles(["teacher", "academic", "admin", "manager", "student"]), getNotes);
+router.get("/:id", authorizeRoles(["teacher", "academic", "admin", "manager", "student"]), getNoteById);
+router.put("/:id", authorizeRoles(["teacher", "academic", "admin", "manager"]), updateNote);
+router.delete("/:id", authorizeRoles(["teacher", "academic", "admin", "manager"]), deleteNote);
 
 module.exports = router;

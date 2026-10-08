@@ -17,14 +17,16 @@ exports.getNotes = async (req, res) => {
     try {
         const { batch_id } = req.query;
 
-        if (!batch_id) {
-            return res.status(400).json({ error: "Batch ID is required." });
+        let query = supabase
+            .from("notes")
+            .select("notes_id, created_at, link, batch_id, title, note, files")
+            .order("created_at", { ascending: false });
+
+        if (batch_id) {
+            query = query.eq("batch_id", batch_id);
         }
 
-        const { data, error } = await supabase
-            .from("notes")
-            .select("notes_id, created_at, link, batch_id, title, note") // Ensure notes_id is included
-            .eq("batch_id", batch_id);
+        const { data, error } = await query;
 
         if (error) throw error;
 
